@@ -39,3 +39,18 @@ export type CodecProfile =
   | 'amr_nb'
   | 'g722'
   | 'voip_jitter';
+
+export interface SessionSummary {
+  completedAt: number;
+  durationSeconds: number;
+  windowCount: number;
+  meanScore: number;
+  peakScore: number;
+  minScore: number;
+  meanMetrics: MetricsBreakdown;
+  threatLevel: ThreatLevel;
+  actionRecommended: string;
+  sourceType: string;
+  sourceName: string;
+  completedNaturally: boolean;
+}

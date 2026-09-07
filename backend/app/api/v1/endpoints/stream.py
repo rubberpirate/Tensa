@@ -97,6 +97,11 @@ async def stream_audio_ws(websocket: WebSocket) -> None:
                         resp = ContextUpdatedResponse(call_id=session.call_id, codec=session.codec)
                         await websocket.send_json(resp.model_dump())
 
+                        # Broadcast immediate risk update with new context boost
+                        risk_event = session.risk_engine.current_event()
+                        if risk_event:
+                            await websocket.send_json(_format_risk_event(risk_event, session).model_dump())
+
                 elif event == "session_end":
                     if session:
                         session_manager.remove_session(session.call_id)

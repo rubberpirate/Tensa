@@ -21,6 +21,8 @@ import {
   Eye,
   Server
 } from 'lucide-react';
+import { Button } from './ui/button';
+import { TabsList, TabsTrigger } from './ui/tabs';
 
 interface LandingPageProps {
   onLaunchDemo: () => void;
@@ -55,22 +57,28 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchDemo }) => {
           </p>
 
           {/* CTA Buttons */}
-          <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4 w-full sm:w-auto">
-            <button
+          <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3 w-full sm:w-auto">
+            <Button
+              size="lg"
               onClick={onLaunchDemo}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-sm hover:shadow-md cursor-pointer"
+              className="w-full sm:w-auto gap-2 text-sm font-semibold h-11 px-6 shadow-xs"
             >
               <Activity className="w-4 h-4" />
               <span>Launch Live Detection SOC</span>
               <ArrowRight className="w-4 h-4 ml-1" />
-            </button>
-            <a
-              href="#solutions"
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-lg text-sm font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 transition-colors shadow-sm"
+            </Button>
+            <Button
+              variant="outline"
+              size="lg"
+              onClick={() => {
+                const el = document.getElementById('solutions');
+                if (el) el.scrollIntoView({ behavior: 'smooth' });
+              }}
+              className="w-full sm:w-auto gap-2 text-sm font-semibold h-11 px-6 text-slate-700 bg-white hover:bg-slate-50 border-slate-300"
             >
               <span>Explore Solutions</span>
               <ChevronRight className="w-4 h-4 text-slate-400" />
-            </a>
+            </Button>
           </div>
 
           {/* Key Stat Cards Strip */}
@@ -103,10 +111,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchDemo }) => {
       <section id="solutions" className="py-20 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto">
         {/* Section Header */}
         <div className="text-center max-w-2xl mx-auto mb-10">
-          <span className="text-xs font-bold text-blue-600 tracking-wider uppercase">
-            Tailored Security Solutions
-          </span>
-          <h2 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-slate-900 mt-2">
+          <h2 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-slate-900 tracking-tight">
             Engineered for Critical Banking &amp; Everyday Citizens
           </h2>
           <p className="mt-3 text-sm sm:text-base text-slate-600">
@@ -116,30 +121,24 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchDemo }) => {
 
         {/* Segment Switcher Toggle */}
         <div className="flex justify-center mb-10">
-          <div className="inline-flex p-1.5 rounded-xl bg-slate-200 border border-slate-300 shadow-inner">
-            <button
+          <TabsList className="bg-slate-100 border border-slate-200/80 p-1 h-10">
+            <TabsTrigger
+              active={activeSegment === 'enterprise'}
               onClick={() => setActiveSegment('enterprise')}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
-                activeSegment === 'enterprise'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-700 hover:text-slate-900'
-              }`}
+              className="gap-2 px-5 py-1.5 text-xs sm:text-sm font-semibold"
             >
               <Building2 className="w-4 h-4" />
               <span>For Enterprise &amp; Banking</span>
-            </button>
-            <button
+            </TabsTrigger>
+            <TabsTrigger
+              active={activeSegment === 'consumer'}
               onClick={() => setActiveSegment('consumer')}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold transition-all cursor-pointer ${
-                activeSegment === 'consumer'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-700 hover:text-slate-900'
-              }`}
+              className="gap-2 px-5 py-1.5 text-xs sm:text-sm font-semibold"
             >
               <UserCheck className="w-4 h-4" />
               <span>For Citizens &amp; Families</span>
-            </button>
-          </div>
+            </TabsTrigger>
+          </TabsList>
         </div>
 
         {/* Dynamic Audience Content */}
@@ -340,10 +339,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchDemo }) => {
       <section id="indian-context" className="py-20 px-4 sm:px-6 lg:px-8 border-t border-slate-200 bg-white">
         <div className="max-w-5xl mx-auto">
           <div className="text-center max-w-2xl mx-auto mb-12">
-            <span className="text-xs font-bold text-blue-600 tracking-wider uppercase">
-              The Indian Telecom Landscape
-            </span>
-            <h2 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-slate-900 mt-2">
+            <h2 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-slate-900 tracking-tight">
               Why Western Audio Detectors Fail on Indian Networks
             </h2>
             <p className="mt-3 text-sm sm:text-base text-slate-600">
@@ -354,8 +350,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchDemo }) => {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="p-6 rounded-xl bg-slate-50 border border-slate-200">
-              <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-sm mb-4">
-                01
+              <div className="w-9 h-9 rounded-lg bg-blue-50 border border-blue-200/60 flex items-center justify-center text-blue-600 mb-4">
+                <PhoneCall className="w-4 h-4" />
               </div>
               <h3 className="text-base font-bold text-slate-900">
                 The 8kHz AMR-NB Codec Bottleneck
@@ -367,8 +363,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchDemo }) => {
             </div>
 
             <div className="p-6 rounded-xl bg-slate-50 border border-slate-200">
-              <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-sm mb-4">
-                02
+              <div className="w-9 h-9 rounded-lg bg-blue-50 border border-blue-200/60 flex items-center justify-center text-blue-600 mb-4">
+                <Layers className="w-4 h-4" />
               </div>
               <h3 className="text-base font-bold text-slate-900">
                 Code-Switching &amp; 22 Languages
@@ -381,8 +377,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchDemo }) => {
             </div>
 
             <div className="p-6 rounded-xl bg-slate-50 border border-slate-200">
-              <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-sm mb-4">
-                03
+              <div className="w-9 h-9 rounded-lg bg-blue-50 border border-blue-200/60 flex items-center justify-center text-blue-600 mb-4">
+                <Radio className="w-4 h-4" />
               </div>
               <h3 className="text-base font-bold text-slate-900">
                 Acoustic Environmental Noise
@@ -401,10 +397,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchDemo }) => {
       <section id="architecture" className="py-20 px-4 sm:px-6 lg:px-8 border-t border-slate-200 bg-slate-50">
         <div className="max-w-5xl mx-auto">
           <div className="text-center max-w-2xl mx-auto mb-12">
-            <span className="text-xs font-bold text-blue-600 tracking-wider uppercase">
-              End-to-End System Pipeline
-            </span>
-            <h2 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-slate-900 mt-2">
+            <h2 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-slate-900 tracking-tight">
               Cascaded Dual-Tier Latency Budget Architecture
             </h2>
             <p className="mt-3 text-sm sm:text-base text-slate-600">
@@ -538,10 +531,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchDemo }) => {
       <section id="compliance" className="py-16 px-4 sm:px-6 lg:px-8 border-t border-slate-200 bg-white">
         <div className="max-w-5xl mx-auto">
           <div className="text-center max-w-2xl mx-auto mb-10">
-            <span className="text-xs font-bold text-blue-600 tracking-wider uppercase">
-              Regulatory Alignment
-            </span>
-            <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1">
+            <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
               Indian Statutory &amp; Privacy Compliance
             </h2>
           </div>
@@ -604,14 +594,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchDemo }) => {
             banking wire freeze interceptor, and telephony codec toggles right now.
           </p>
           <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4">
-            <button
+            <Button
+              size="lg"
               onClick={onLaunchDemo}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-lg text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-sm hover:shadow-md cursor-pointer"
+              className="w-full sm:w-auto gap-2 px-8 py-3.5 h-12 text-sm font-bold shadow-sm"
             >
               <Activity className="w-4 h-4" />
               <span>Launch Detection SOC Workbench</span>
               <ArrowRight className="w-4 h-4 ml-1" />
-            </button>
+            </Button>
           </div>
         </div>
       </section>
