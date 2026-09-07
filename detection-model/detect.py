@@ -2,6 +2,7 @@ import os
 import sys
 import time
 from collections import deque
+import numpy as np
 from pathlib import Path
 from typing import Tuple, Literal
 
@@ -36,6 +37,89 @@ HUMAN_THRESHOLD = 0.35
 EMA_ALPHA = 0.4
 AI_CONFIRMATIONS = 2
 HUMAN_CONFIRMATIONS = 2
+
+# Silence Detection Thresholds
+SILENCE_DB_THRESHOLD = -45.0  # Chunks below -45 dBFS are considered empty/silent
+MIN_RMS_THRESHOLD = 0.001
+
+
+class AudioSilenceDetector:
+    """
+    Detects empty or silent audio chunks based on RMS energy and decibel level (dBFS).
+    Optionally utilizes webrtcvad if installed in the environment.
+    """
+
+    def __init__(self, silence_db_threshold: float = SILENCE_DB_THRESHOLD, min_rms_threshold: float = MIN_RMS_THRESHOLD):
+        self.silence_db_threshold = silence_db_threshold
+        self.min_rms_threshold = min_rms_threshold
+
+        try:
+            import webrtcvad
+            self.webrtcvad = webrtcvad.Vad(1)
+        except ImportError:
+            self.webrtcvad = None
+
+    def is_empty(self, audio_chunk: np.ndarray, sample_rate: int = AUDIO_SAMPLE_RATE) -> Tuple[bool, float]:
+        """
+        Returns (is_empty: bool, dbfs_level: float).
+        audio_chunk is assumed to be float32 1D numpy array in [-1.0, 1.0].
+        """
+        if len(audio_chunk) == 0:
+            return True, -100.0
+
+        # Calculate Root Mean Square (RMS) energy
+        rms = np.sqrt(np.mean(np.square(audio_chunk)))
+        if rms < 1e-7:
+            return True, -100.0
+
+        # Convert RMS to dBFS
+        dbfs = float(20.0 * np.log10(rms))
+
+        # Primary check: energy below threshold
+        if dbfs < self.silence_db_threshold or rms < self.min_rms_threshold:
+            return True, dbfs
+
+        # Optional WebRTC VAD check if webrtcvad package is available
+        if self.webrtcvad is not None:
+            # Convert float32 to int16 PCM
+            pcm_data = (audio_chunk * 32767.0).clip(-32768, 32767).astype(np.int16).tobytes()
+            frame_size = int(sample_rate * 0.03) * 2  # 30ms frame in bytes (2 bytes/sample)
+            has_speech = False
+            for offset in range(0, len(pcm_data) - frame_size, frame_size):
+                frame = pcm_data[offset : offset + frame_size]
+                if self.webrtcvad.is_speech(frame, sample_rate):
+                    has_speech = True
+                    break
+            if not has_speech:
+                return True, dbfs
+
+        return False, dbfs
+
+
+def get_audio_durations(audio_16khz: np.ndarray, silence_detector: AudioSilenceDetector, frame_sec: float = 0.1) -> Tuple[float, float, float]:
+    """
+    Calculates (total_duration, active_duration, trimmed_silence_duration) in seconds.
+    """
+    total_sec = len(audio_16khz) / AUDIO_SAMPLE_RATE
+    if total_sec == 0:
+        return 0.0, 0.0, 0.0
+
+    frame_samples = int(AUDIO_SAMPLE_RATE * frame_sec)
+    if frame_samples == 0:
+        return total_sec, total_sec, 0.0
+
+    num_frames = len(audio_16khz) // frame_samples
+    active_frames = 0
+    for i in range(num_frames):
+        frame = audio_16khz[i * frame_samples : (i + 1) * frame_samples]
+        is_empty, _ = silence_detector.is_empty(frame)
+        if not is_empty:
+            active_frames += 1
+
+    active_sec = active_frames * frame_sec
+    active_sec = min(active_sec, total_sec)
+    trimmed_sec = max(0.0, total_sec - active_sec)
+    return total_sec, active_sec, trimmed_sec
 
 
 class AudioResampler:
@@ -242,6 +326,7 @@ def detect(audio_path: str, use_onnx: bool = False):
         engine = PyTorchInferenceEngine()
 
     decision_engine = DecisionEngine()
+    silence_detector = AudioSilenceDetector()
 
     # If audio is shorter than 3s, pad to 3s
     if len(audio_16khz) < WINDOW_SAMPLES:
@@ -249,13 +334,31 @@ def detect(audio_path: str, use_onnx: bool = False):
         padded[: len(audio_16khz)] = audio_16khz
         audio_16khz = padded
 
+    total_chunks = 0
+    active_chunks = 0
+    silent_chunks = 0
+
     start_idx = 0
     print("\n" + "-" * 75)
     print(f"{'Time Window':<16} | {'Raw AI Score':<14} | {'EMA Score':<12} | {'Latency':<10} | {'Status':<8}")
     print("-" * 75)
 
     while start_idx + WINDOW_SAMPLES <= len(audio_16khz):
+        total_chunks += 1
         chunk_3s = audio_16khz[start_idx : start_idx + WINDOW_SAMPLES]
+        
+        # Check if the 3-second chunk is empty / silent before passing to the model
+        is_empty, dbfs = silence_detector.is_empty(chunk_3s)
+        if is_empty:
+            silent_chunks += 1
+            t_start = start_idx / AUDIO_SAMPLE_RATE
+            t_end = (start_idx + WINDOW_SAMPLES) / AUDIO_SAMPLE_RATE
+            window_str = f"{t_start:.1f}s - {t_end:.1f}s"
+            print(f"{window_str:<16} | {'[EMPTY/SILENT]':<14} | {decision_engine.ema_score:<12.2%} | {'0.0ms':<8} | {'SILENT':<8}")
+            start_idx += STRIDE_SAMPLES
+            continue
+
+        active_chunks += 1
         raw_ai_score, latency_ms = engine.predict(chunk_3s)
         status, ema_score = decision_engine.update(raw_ai_score)
 
@@ -271,7 +374,13 @@ def detect(audio_path: str, use_onnx: bool = False):
     if status_label == "UNKNOWN":
         status_label = "AI" if decision_engine.ema_score >= AI_THRESHOLD else ("HUMAN" if decision_engine.ema_score <= HUMAN_THRESHOLD else "UNCERTAIN")
 
+    total_sec, active_sec, trimmed_sec = get_audio_durations(audio_16khz, silence_detector)
+    active_pct = (active_sec / total_sec * 100.0) if total_sec > 0 else 0.0
+    trimmed_pct = (trimmed_sec / total_sec * 100.0) if total_sec > 0 else 0.0
+
     print(f"File:                      {audio_path}")
+    print(f"Original Audio Duration:   {total_sec:.2f}s")
+    print(f"Active (Processed) Audio:  {active_sec:.2f}s ({active_pct:.1f}%)")
     print(f"Final Call Status:         {status_label}")
     print(f"Final Smoothed AI Score:   {decision_engine.ema_score:.2%}")
     print(f"Final Human/Real Score:    {(1.0 - decision_engine.ema_score):.2%}")
