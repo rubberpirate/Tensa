@@ -1,21 +1,3 @@
-# Project Tensa — AI Voice Detection Model
-
-Wav2Vec2 fine-tuned audio classification engine with **CUDA FP16 Tensor Core acceleration**, **polyphase rational resampling**, **sliding window EMA hysteresis smoothing**, and **real-time streaming with CNN encoder caching**.
-
----
-
-## Features
-
-- **Blazing Fast**: Uses FP16 half-precision on NVIDIA Tensor Cores with optional `torch.compile` kernel fusion (~12–35ms latency).
-- **Fast Resampling**: Scipy rational polyphase resampling (`signal.resample_poly`), 10x faster than librosa.
-- **Sliding-Window Inference**: Evaluates audio in overlapping 3.0s windows (1.0s stride) with an Exponential Moving Average (EMA, $\alpha=0.4$) and 2-step hysteresis state machine.
-- **Silence & Empty Audio Detection**: Detects silent and low-energy audio chunks via RMS energy and dBFS thresholds to prevent false classifications on silence.
-- **Privacy & DPDP Compliant**: Direct in-memory Float32 array inference (`detect_array`) with zero disk writes.
-- **Live Streaming Support**: Integrates with `model_runner.Wav2Vec2StreamingDetector` for 250ms streaming chunk ingestion with 83% CNN feature cache reuse.
-- **Quantization Support**: Built-in automated export to ONNX FP32 and INT8 Dynamic Quantization (`model_int8.onnx`), compressing model from ~1.2 GB to ~300 MB for edge CPU deployments.
-
----
-
 ## Quick Start
 
 ### 1. Environment Setup

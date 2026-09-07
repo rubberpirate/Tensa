@@ -1,6 +1,5 @@
-# Project Tensa 🛡️
+# Project Tensa
 ### Real-Time Voice Cloning & Telecom Deepfake Defense System
-*Built for Smart India Hackathon (SIH) 2026 — Enterprise Banking & Telecom Security*
 
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
@@ -10,12 +9,9 @@
 
 ---
 
-## ⚡ Overview
+## Overview
 
 **Project Tensa** is an ultra-low-latency, multi-tier defense engine engineered to detect and neutralize synthetic voice cloning and AI-generated audio attacks in real-time during live banking transactions and telecommunication calls.
-
-### The Latency Challenge
-Standard offline deepfake models (such as `Wav2Vec2-Large` with 317M parameters) incur 120–170ms latency per forward pass and demand 2.5–3.0 seconds of audio accumulation, introducing critical blind spots in high-throughput banking channels.
 
 ### Tensa's Solution
 Tensa introduces a **decoupled, two-tier cascaded architecture**:
@@ -25,7 +21,7 @@ Tensa introduces a **decoupled, two-tier cascaded architecture**:
 
 ---
 
-## 🏛️ Architecture
+##  Architecture
 
 ```mermaid
 graph TD
@@ -86,7 +82,7 @@ In strict accordance with the **Digital Personal Data Protection (DPDP) Act 2023
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Prerequisites
 - Python 3.12+ with [uv](https://github.com/astral-sh/uv)
@@ -105,7 +101,7 @@ In strict accordance with the **Digital Personal Data Protection (DPDP) Act 2023
 
 ---
 
-## 🧪 Testing & Verification
+## Testing & Verification
 
 ### Run Complete Unit Test Suite (17 Tests)
 ```bash
