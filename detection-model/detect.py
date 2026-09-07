@@ -25,20 +25,6 @@ from collections import deque
 from pathlib import Path
 from typing import Deque, Dict, List, Literal, Optional, Tuple, Union
 
-import numpy as np
-import soundfile as sf
-import torch
-from scipy import signal
-from transformers import (
-    AutoFeatureExtractor,
-    AutoModelForAudioClassification,
-)
-
-try:
-    import onnxruntime as ort
-except ImportError:
-    ort = None
-
 StatusType = Literal["ai", "human", "unknown"]
 
 HF_REPO_ID = "garystafford/wav2vec2-deepfake-voice-detector"
@@ -90,6 +76,7 @@ class AudioSilenceDetector:
         Returns (is_empty: bool, dbfs_level: float).
         audio_chunk is assumed to be float32 1D numpy array in [-1.0, 1.0].
         """
+        import numpy as np
         if len(audio_chunk) == 0:
             return True, -100.0
 
@@ -158,6 +145,8 @@ class AudioResampler:
         self.target_sample_rate = target_sample_rate
 
     def resample(self, audio_array: np.ndarray, source_sample_rate: int) -> np.ndarray:
+        import numpy as np
+        from scipy import signal
         if len(audio_array) == 0:
             return np.array([], dtype=np.float32)
 
@@ -242,6 +231,10 @@ class PyTorchInferenceEngine:
     """High-speed PyTorch backend utilizing FP16 Tensor Cores on CUDA."""
 
     def __init__(self, use_compile: bool = False):
+        import torch
+        import numpy as np
+        from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
+
         source = str(LOCAL_DIR) if LOCAL_WEIGHTS.exists() else HF_REPO_ID
         local_only = LOCAL_WEIGHTS.exists()
 
@@ -268,6 +261,8 @@ class PyTorchInferenceEngine:
         self.model.eval()
 
     def predict(self, audio_chunk: np.ndarray) -> Tuple[float, float]:
+        import torch
+        import numpy as np
         start = time.perf_counter()
 
         # Normalize to [-1, 1]
@@ -297,6 +292,51 @@ class PyTorchInferenceEngine:
         ai_probability = float(probs[1].item())
         latency_ms = (time.perf_counter() - start) * 1000.0
         return ai_probability, latency_ms
+
+    def predict_batch(self, chunks: List[np.ndarray]) -> List[Tuple[float, float]]:
+        import torch
+        import numpy as np
+        if not chunks:
+            return []
+
+        start = time.perf_counter()
+
+        normalized_chunks = []
+        for chunk in chunks:
+            peak = np.abs(chunk).max()
+            if peak > 0:
+                normalized_chunks.append(chunk / peak)
+            else:
+                normalized_chunks.append(chunk)
+
+        inputs = self.feature_extractor(
+            normalized_chunks,
+            sampling_rate=AUDIO_SAMPLE_RATE,
+            return_tensors="pt",
+            padding=True,
+        )
+
+        if self.device == "cuda" and next(self.model.parameters()).dtype == torch.float16:
+            inputs = {
+                k: (v.to(self.device, dtype=torch.float16) if v.is_floating_point() else v.to(self.device))
+                for k, v in inputs.items()
+            }
+        else:
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            probs = torch.softmax(outputs.logits.float(), dim=-1)
+
+        total_latency_ms = (time.perf_counter() - start) * 1000.0
+        per_chunk_latency_ms = total_latency_ms / len(chunks)
+
+        results = []
+        for p in probs:
+            ai_prob = float(p[1].item())
+            results.append((ai_prob, per_chunk_latency_ms))
+
+        return results
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +444,7 @@ class PreloadedEngineClient:
             send_ipc_msg(sock, {"cmd": "ping"})
             resp = recv_ipc_msg(sock)
             if resp and resp.get("status") == "ok":
+                sock.settimeout(60.0)
                 self.sock = sock
                 return True
             sock.close()
@@ -431,6 +472,80 @@ class PreloadedEngineClient:
             except Exception:
                 pass
             self.sock = None
+
+    def stream_file(
+        self,
+        audio_path: str,
+        window_seconds: float = WINDOW_SECONDS,
+        stride_seconds: float = STRIDE_SECONDS,
+        direct: bool = False,
+    ) -> dict:
+        if not self.connect():
+            raise RuntimeError("Preloaded model server disconnected")
+        try:
+            send_ipc_msg(
+                self.sock,
+                {
+                    "cmd": "stream_file",
+                    "audio_path": os.path.abspath(audio_path),
+                    "window_seconds": window_seconds,
+                    "stride_seconds": stride_seconds,
+                    "direct": direct,
+                },
+            )
+
+            header = recv_ipc_msg(self.sock)
+            if not header or header.get("status") != "ok":
+                raise RuntimeError(f"Preloaded server error: {header}")
+
+            total_sec = header["total_duration_sec"]
+            sr = header["sample_rate"]
+
+            print(f"--> Reading audio: {audio_path}", flush=True)
+            print(f"--> Duration: {total_sec:.2f}s | Sample Rate: {sr} Hz -> {AUDIO_SAMPLE_RATE} Hz", flush=True)
+            print("--> Reusing preloaded model weights from memory.", flush=True)
+
+            if direct:
+                res = recv_ipc_msg(self.sock)
+                print()
+                print(f"File:        {audio_path}")
+                print(f"Prediction:  {res['prediction']}")
+                print(f"Real:        {res['prob_real']:.2%}")
+                print(f"Fake:        {res['prob_fake']:.2%}")
+                print(f"Confidence:  {res['confidence']:.2%}")
+                print(f"Latency:     {res['latency_ms']:.1f} ms")
+                return res
+
+            print("\n" + "-" * 75, flush=True)
+            print(f"{'Time Window':<16} | {'Raw AI Score':<14} | {'EMA Score':<12} | {'Latency':<10} | {'Status':<8}", flush=True)
+            print("-" * 75, flush=True)
+
+            while True:
+                msg = recv_ipc_msg(self.sock)
+                if not msg:
+                    break
+                msg_type = msg.get("type")
+                if msg_type == "window":
+                    raw_str = f"{msg['raw_ai_score']:.2%}" if msg['raw_ai_score'] is not None else "[EMPTY/SILENT]"
+                    ema_str = f"{msg['ema_score']:.2%}"
+                    lat_str = f"{msg['latency_ms']:.1f}ms"
+                    stat_str = msg['status'].upper()
+                    print(f"{msg['window']:<16} | {raw_str:<14} | {ema_str:<12} | {lat_str:<10} | {stat_str:<8}", flush=True)
+                elif msg_type == "end":
+                    print("-" * 75 + "\n", flush=True)
+                    active_pct = (msg['active_duration_sec'] / msg['total_duration_sec'] * 100.0) if msg['total_duration_sec'] > 0 else 0.0
+
+                    print(f"File:                      {audio_path}")
+                    print(f"Original Audio Duration:   {msg['total_duration_sec']:.2f}s")
+                    print(f"Active (Processed) Audio:  {msg['active_duration_sec']:.2f}s ({active_pct:.1f}%)")
+                    print(f"Final Call Status:         {msg['status']} ({msg['prediction']})")
+                    print(f"Final Smoothed AI Score:   {msg['prob_fake']:.2%}")
+                    print(f"Final Human/Real Score:    {msg['prob_real']:.2%}")
+                    print(f"Total Processing Time:     {msg['latency_ms']:.1f} ms", flush=True)
+                    return msg
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            self.sock = None
+            raise
 
 
 def _get_preloaded_client(host: str = "127.0.0.1", port: int = 50000) -> Optional[PreloadedEngineClient]:
@@ -526,6 +641,23 @@ def detect(
     if not os.path.exists(audio_path):
         print(f"Error: Audio file not found: {audio_path}")
         sys.exit(1)
+
+    # Fast path: Real-Time Socket IPC Streaming from Preloaded Daemon
+    if not use_onnx and not use_streaming:
+        preloaded_client = _get_preloaded_client()
+        if preloaded_client is not None:
+            try:
+                return preloaded_client.stream_file(
+                    audio_path=audio_path,
+                    window_seconds=window_seconds,
+                    stride_seconds=stride_seconds,
+                    direct=direct,
+                )
+            finally:
+                preloaded_client.close()
+
+    import soundfile as sf
+    import numpy as np
 
     audio_data, sr = sf.read(audio_path, dtype="float32")
     resampler = _get_resampler()
