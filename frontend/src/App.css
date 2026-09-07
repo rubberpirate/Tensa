@@ -1,0 +1,41 @@
+/* App layout utilities */
+.app-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+@media (max-width: 768px) {
+  .app-container {
+    padding: 16px 12px;
+    gap: 16px;
+  }
+}
+
+.dashboard-grid-top {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 20px;
+  align-items: stretch;
+}
+
+@media (max-width: 1024px) {
+  .dashboard-grid-top {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dashboard-grid-bottom {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 1024px) {
+  .dashboard-grid-bottom {
+    grid-template-columns: 1fr;
+  }
+}
