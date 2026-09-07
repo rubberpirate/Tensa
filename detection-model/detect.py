@@ -1,3 +1,4 @@
+import os
 import sys
 import torch
 import librosa
@@ -7,17 +8,26 @@ from transformers import (
     AutoFeatureExtractor,
 )
 
-MODEL_DIR = "."
+HF_REPO_ID = "garystafford/wav2vec2-deepfake-voice-detector"
+LOCAL_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Load ONLY from the local directory
+# If local model weights exist, load locally; otherwise fallback to Hugging Face Hub
+local_weights_path = os.path.join(LOCAL_DIR, "model.safetensors")
+if os.path.exists(local_weights_path):
+    model_source = LOCAL_DIR
+    local_only = True
+else:
+    model_source = HF_REPO_ID
+    local_only = False
+
 model = AutoModelForAudioClassification.from_pretrained(
-    MODEL_DIR,
-    local_files_only=True,
+    model_source,
+    local_files_only=local_only,
 )
 
 feature_extractor = AutoFeatureExtractor.from_pretrained(
-    MODEL_DIR,
-    local_files_only=True,
+    model_source,
+    local_files_only=local_only,
 )
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
