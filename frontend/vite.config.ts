@@ -18,6 +18,16 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
       },
+      '/dialer-api': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/dialer-api/, '/api/dialer'),
+      },
+      '/ws/dialer-live': {
+        target: 'http://localhost:8001',
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
 })

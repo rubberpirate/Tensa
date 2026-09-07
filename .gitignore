@@ -33,3 +33,5 @@ detection-model/optimized/*.engine
 .vscode/
 .idea/
 *.log
+
+.env

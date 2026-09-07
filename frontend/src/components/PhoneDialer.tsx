@@ -29,11 +29,15 @@ import {
   ChevronDown,
   ChevronUp,
   ExternalLink,
+  Bot,
+  Headphones,
+  MessageSquareQuote,
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Card } from './ui/card';
 import { cn } from '../lib/utils';
+import { useDialerBackend } from '../hooks/useDialerBackend';
 
 type PhoneScreenState = 'keypad' | 'outgoing_ringing' | 'incoming' | 'connected' | 'summary';
 
@@ -150,6 +154,27 @@ export const PhoneDialer: React.FC<PhoneDialerProps> = ({ onOpenSoc }) => {
     enabled: true,
   });
 
+  // Dialer Backend (Gemini 3.5 Transcribe Live & Gemini 3.5 Flash Lite)
+  const [aiInterventionMode, setAiInterventionMode] = useState<'undecided' | 'handling_to_ai' | 'listening'>('undecided');
+  const aiInterventionModeRef = useRef(aiInterventionMode);
+  aiInterventionModeRef.current = aiInterventionMode;
+
+  const {
+    isDialerConnected,
+    liveTranscript,
+    liveModel,
+    aiSummary,
+    isSummarizing,
+    connectLiveSession,
+    disconnectLiveSession,
+    sendAudioChunk: sendDialerAudioChunk,
+    fetchSummary,
+    resetDialerState,
+  } = useDialerBackend();
+
+  const liveTranscriptRef = useRef(liveTranscript);
+  liveTranscriptRef.current = liveTranscript;
+
   // Handle Playback completion
   const handlePlaybackComplete = (stats: PlaybackStats) => {
     setTimeout(() => {
@@ -211,6 +236,15 @@ export const PhoneDialer: React.FC<PhoneDialerProps> = ({ onOpenSoc }) => {
         completedNaturally: stats.completedNaturally,
       });
 
+      // If handled to AI, trigger Gemini 3.5 Flash Lite summary
+      if (aiInterventionModeRef.current === 'handling_to_ai') {
+        fetchSummary(liveTranscriptRef.current, {
+          callerName,
+          phoneNumber,
+          aiScore: meanScore,
+        });
+      }
+
       setScreenState('summary');
     }, 300);
   };
@@ -225,6 +259,9 @@ export const PhoneDialer: React.FC<PhoneDialerProps> = ({ onOpenSoc }) => {
   } = useAudioStream({
     onChunk: (chunk) => {
       sendAudioChunk(chunk);
+      if (aiInterventionModeRef.current === 'handling_to_ai') {
+        sendDialerAudioChunk(chunk);
+      }
     },
     onPlaybackComplete: handlePlaybackComplete,
   });
@@ -234,7 +271,6 @@ export const PhoneDialer: React.FC<PhoneDialerProps> = ({ onOpenSoc }) => {
   }, [isPlaying]);
 
   // Synchronize incoming risk events from active stream
-
   useEffect(() => {
     if (lastRiskEvent) {
       lastRiskEventRef.current = lastRiskEvent;
@@ -248,6 +284,44 @@ export const PhoneDialer: React.FC<PhoneDialerProps> = ({ onOpenSoc }) => {
       }
     }
   }, [lastRiskEvent]);
+
+  // Fallback detection trigger for standalone testing when Python engine is offline
+  useEffect(() => {
+    if (screenState === 'connected' && isPlaying && !isConnected && audioSourcePreset === 'sample_fake') {
+      const simTimer = setTimeout(() => {
+        const simulatedEvent: RiskEvent = {
+          call_id: callId,
+          timestamp_ms: Date.now(),
+          composite_risk_score: 0.94,
+          threat_level: 'RED',
+          action_recommended: 'BLOCK_SYNTHETIC_CALLER',
+          metrics_breakdown: {
+            s_fast: 0.94,
+            phase_inconsistency: 0.88,
+            bicoherence_deficit: 0.91,
+            pitch_jitter_anomaly: 0.89,
+            respiration_cadence_score: 0.95,
+            spectral_rolloff_anomaly: 0.86,
+            s_deep: 0.96,
+            context_boost: 0.15,
+          },
+          context_reasons: ['Synthetic vocoder artifacts detected', 'Absence of micro-respiration'],
+          bayesian_log_odds: 4.2,
+          bayesian_window_count: 6,
+          tier1_latency_ms: 8.4,
+          tier2_latency_ms: 18.2,
+        };
+        lastRiskEventRef.current = simulatedEvent;
+        setLocalRiskEvent(simulatedEvent);
+        sessionHistoryRef.current.push({
+          score: 0.94,
+          metrics: simulatedEvent.metrics_breakdown,
+          timestamp: Date.now(),
+        });
+      }, 1500);
+      return () => clearTimeout(simTimer);
+    }
+  }, [screenState, isPlaying, isConnected, audioSourcePreset, callId]);
 
   // Call duration counter
   useEffect(() => {
@@ -300,9 +374,21 @@ export const PhoneDialer: React.FC<PhoneDialerProps> = ({ onOpenSoc }) => {
     setCallerName(preset.name);
   };
 
+  // Delegation handlers
+  const handleDelegateToAi = () => {
+    setAiInterventionMode('handling_to_ai');
+    connectLiveSession(callId);
+  };
+
+  const handleListenToCall = () => {
+    setAiInterventionMode('listening');
+  };
+
   // Start Outgoing Call
   const handleStartOutgoingCall = () => {
     cleanupTones();
+    resetDialerState();
+    setAiInterventionMode('undecided');
     setSessionSummary(null);
     sessionHistoryRef.current = [];
     setCallDuration(0);
@@ -323,6 +409,8 @@ export const PhoneDialer: React.FC<PhoneDialerProps> = ({ onOpenSoc }) => {
   // Trigger Incoming Call Simulation
   const handleSimulateIncomingCall = () => {
     cleanupTones();
+    resetDialerState();
+    setAiInterventionMode('undecided');
     setSessionSummary(null);
     sessionHistoryRef.current = [];
     setCallDuration(0);
@@ -364,6 +452,13 @@ export const PhoneDialer: React.FC<PhoneDialerProps> = ({ onOpenSoc }) => {
   const handleEndCall = () => {
     cleanupTones();
     stopAll();
+    if (aiInterventionModeRef.current === 'handling_to_ai') {
+      fetchSummary(liveTranscriptRef.current, {
+        callerName,
+        phoneNumber,
+        aiScore: localRiskEvent.composite_risk_score,
+      });
+    }
     setScreenState('summary');
   };
 
@@ -371,6 +466,9 @@ export const PhoneDialer: React.FC<PhoneDialerProps> = ({ onOpenSoc }) => {
   const handleResetToKeypad = () => {
     cleanupTones();
     stopAll();
+    disconnectLiveSession();
+    resetDialerState();
+    setAiInterventionMode('undecided');
     setSessionSummary(null);
     setCallDuration(0);
     setScreenState('keypad');
@@ -794,89 +892,200 @@ export const PhoneDialer: React.FC<PhoneDialerProps> = ({ onOpenSoc }) => {
                         />
                       </div>
                     </div>
+
+                    {/* =============================================================
+                        USER INTERVENTION CHOICE WHEN AI IS DETECTED
+                       ============================================================= */}
+                    {(localRiskEvent.threat_level === 'RED' || localRiskEvent.composite_risk_score >= 0.7) &&
+                      aiInterventionMode === 'undecided' && (
+                        <div className="mt-3 p-3.5 rounded-xl bg-gradient-to-b from-rose-950/95 to-zinc-950 border border-rose-500/50 text-left shadow-lg animate-in fade-in duration-300">
+                          <div className="flex items-center gap-1.5 text-rose-300 mb-1.5">
+                            <ShieldAlert className="w-4 h-4 text-rose-400 animate-pulse" />
+                            <span className="text-[11px] font-bold uppercase tracking-wider">
+                              AI Voice Clone Detected!
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-zinc-300 leading-snug mb-3">
+                            Synthetic voice identified. Choose how you would like to handle this call:
+                          </p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={handleDelegateToAi}
+                              className="flex flex-col items-center justify-center p-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-[11px] border border-indigo-400/40 shadow-xs transition-transform active:scale-95 cursor-pointer"
+                            >
+                              <Bot className="w-4 h-4 mb-1 text-indigo-200" />
+                              <span>Handle Call to AI</span>
+                              <span className="text-[8px] font-normal text-indigo-200 mt-0.5">Gemini Sentinel</span>
+                            </button>
+                            <button
+                              onClick={handleListenToCall}
+                              className="flex flex-col items-center justify-center p-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold text-[11px] border border-zinc-600 shadow-xs transition-transform active:scale-95 cursor-pointer"
+                            >
+                              <Headphones className="w-4 h-4 mb-1 text-zinc-300" />
+                              <span>Listen to Call</span>
+                              <span className="text-[8px] font-normal text-zinc-400 mt-0.5">Passive Monitor</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                    {/* Passive Listening Mode Pill */}
+                    {aiInterventionMode === 'listening' && (
+                      <div className="mt-2 px-3 py-1 rounded-lg bg-blue-950/60 border border-blue-800/40 text-center flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-[10px] text-blue-300 font-medium">
+                          <Headphones className="w-3 h-3 text-blue-400" />
+                          <span>Passive Monitoring Active</span>
+                        </div>
+                        <button
+                          onClick={handleDelegateToAi}
+                          className="text-[9px] font-bold text-indigo-400 hover:text-indigo-300 underline cursor-pointer"
+                        >
+                          Delegate to AI
+                        </button>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Standard In-Call 6-Button Grid */}
-                  <div className="grid grid-cols-3 gap-3 max-w-[260px] mx-auto w-full pt-1">
-                    {/* Mute */}
-                    <button
-                      onClick={() => setIsMuted(!isMuted)}
-                      className={cn(
-                        'w-14 h-14 rounded-full flex flex-col items-center justify-center mx-auto transition-colors border focus:outline-none',
-                        isMuted
-                          ? 'bg-white text-zinc-900 border-white'
-                          : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700'
-                      )}
-                    >
-                      {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                      <span className="text-[8px] font-medium mt-0.5">Mute</span>
-                    </button>
+                  {/* =============================================================
+                      AI SENTINEL ACTIVE VIEW (When user chose "Handle to AI")
+                     ============================================================= */}
+                  {aiInterventionMode === 'handling_to_ai' ? (
+                    <div className="my-1 flex-1 flex flex-col justify-between">
+                      {/* AI Sentinel Header Badge */}
+                      <div className="p-2.5 rounded-lg bg-indigo-950/80 border border-indigo-500/50 text-left mb-2 shadow-inner">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 text-indigo-300 font-bold text-[11px]">
+                            <Bot className="w-4 h-4 text-indigo-400 animate-bounce" />
+                            <span>AI SENTINEL ENGAGED</span>
+                          </div>
+                          <span className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-indigo-900 text-indigo-200 border border-indigo-400/40">
+                            Gemini 3.5 Live
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-indigo-200/80 mt-1 leading-tight">
+                          Call handed over to AI defense agent. Uploading audio chunks for real-time transcription.
+                        </p>
+                      </div>
 
-                    {/* In-Call Keypad */}
-                    <button
-                      onClick={() => setShowInCallKeypad(!showInCallKeypad)}
-                      className={cn(
-                        'w-14 h-14 rounded-full flex flex-col items-center justify-center mx-auto transition-colors border focus:outline-none',
-                        showInCallKeypad
-                          ? 'bg-white text-zinc-900 border-white'
-                          : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700'
-                      )}
-                    >
-                      <Grid className="w-5 h-5" />
-                      <span className="text-[8px] font-medium mt-0.5">Keypad</span>
-                    </button>
+                      {/* Live Audio Streaming & Real-Time Transcription Container */}
+                      <div className="flex-1 min-h-[140px] max-h-[180px] overflow-y-auto p-2.5 rounded-lg bg-black/60 border border-zinc-700/80 text-left font-mono flex flex-col">
+                        <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-zinc-800 text-[9px] text-zinc-400">
+                          <span className="flex items-center gap-1.5 text-emerald-400 font-semibold">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                            Live Speech-to-Text
+                          </span>
+                          <span className="text-zinc-400 font-mono">Gemini 3.5 Transcribe</span>
+                        </div>
+                        <div className="flex-1 overflow-y-auto space-y-1.5 text-zinc-200 text-[11px] leading-relaxed">
+                          {liveTranscript ? (
+                            <p className="whitespace-pre-wrap text-emerald-300/90">{liveTranscript}</p>
+                          ) : (
+                            <p className="text-zinc-500 italic text-[10px] animate-pulse">
+                              Transcribing incoming caller audio chunks in real-time...
+                            </p>
+                          )}
+                        </div>
+                      </div>
 
-                    {/* Speaker */}
-                    <button
-                      onClick={() => setIsSpeakerOn(!isSpeakerOn)}
-                      className={cn(
-                        'w-14 h-14 rounded-full flex flex-col items-center justify-center mx-auto transition-colors border focus:outline-none',
-                        isSpeakerOn
-                          ? 'bg-white text-zinc-900 border-white'
-                          : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700'
-                      )}
-                    >
-                      <Volume2 className="w-5 h-5" />
-                      <span className="text-[8px] font-medium mt-0.5">Speaker</span>
-                    </button>
+                      {/* Action Bar for AI Handled Mode */}
+                      <div className="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-zinc-800">
+                        <button
+                          onClick={() => setAiInterventionMode('listening')}
+                          className="flex-1 py-1.5 px-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium text-[10px] border border-zinc-700 transition-colors cursor-pointer"
+                        >
+                          Take Back Call
+                        </button>
+                        <button
+                          onClick={handleEndCall}
+                          className="flex-1 py-1.5 px-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px] shadow-sm transition-colors cursor-pointer"
+                        >
+                          End & Summarize
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Standard In-Call 6-Button Grid */
+                    <div className="grid grid-cols-3 gap-3 max-w-[260px] mx-auto w-full pt-1">
+                      {/* Mute */}
+                      <button
+                        onClick={() => setIsMuted(!isMuted)}
+                        className={cn(
+                          'w-14 h-14 rounded-full flex flex-col items-center justify-center mx-auto transition-colors border focus:outline-none',
+                          isMuted
+                            ? 'bg-white text-zinc-900 border-white'
+                            : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700'
+                        )}
+                      >
+                        {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                        <span className="text-[8px] font-medium mt-0.5">Mute</span>
+                      </button>
 
-                    {/* Add Call */}
-                    <button
-                      className="w-14 h-14 rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700/60 flex flex-col items-center justify-center mx-auto cursor-not-allowed opacity-60"
-                      disabled
-                    >
-                      <Plus className="w-5 h-5" />
-                      <span className="text-[8px] font-medium mt-0.5">Add</span>
-                    </button>
+                      {/* In-Call Keypad */}
+                      <button
+                        onClick={() => setShowInCallKeypad(!showInCallKeypad)}
+                        className={cn(
+                          'w-14 h-14 rounded-full flex flex-col items-center justify-center mx-auto transition-colors border focus:outline-none',
+                          showInCallKeypad
+                            ? 'bg-white text-zinc-900 border-white'
+                            : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700'
+                        )}
+                      >
+                        <Grid className="w-5 h-5" />
+                        <span className="text-[8px] font-medium mt-0.5">Keypad</span>
+                      </button>
 
-                    {/* Hold */}
-                    <button
-                      onClick={() => setIsOnHold(!isOnHold)}
-                      className={cn(
-                        'w-14 h-14 rounded-full flex flex-col items-center justify-center mx-auto transition-colors border focus:outline-none',
-                        isOnHold
-                          ? 'bg-white text-zinc-900 border-white'
-                          : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700'
-                      )}
-                    >
-                      <Pause className="w-5 h-5" />
-                      <span className="text-[8px] font-medium mt-0.5">Hold</span>
-                    </button>
+                      {/* Speaker */}
+                      <button
+                        onClick={() => setIsSpeakerOn(!isSpeakerOn)}
+                        className={cn(
+                          'w-14 h-14 rounded-full flex flex-col items-center justify-center mx-auto transition-colors border focus:outline-none',
+                          isSpeakerOn
+                            ? 'bg-white text-zinc-900 border-white'
+                            : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700'
+                        )}
+                      >
+                        <Volume2 className="w-5 h-5" />
+                        <span className="text-[8px] font-medium mt-0.5">Speaker</span>
+                      </button>
 
-                    {/* Inspect Telemetry */}
-                    <button
-                      onClick={() => setShowForensicDetails(!showForensicDetails)}
-                      className={cn(
-                        'w-14 h-14 rounded-full flex flex-col items-center justify-center mx-auto transition-colors border focus:outline-none',
-                        showForensicDetails
-                          ? 'bg-white text-zinc-900 border-white'
-                          : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700'
-                      )}
-                    >
-                      <Shield className="w-5 h-5" />
-                      <span className="text-[8px] font-medium mt-0.5">Inspect</span>
-                    </button>
-                  </div>
+                      {/* Add Call */}
+                      <button
+                        className="w-14 h-14 rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700/60 flex flex-col items-center justify-center mx-auto cursor-not-allowed opacity-60"
+                        disabled
+                      >
+                        <Plus className="w-5 h-5" />
+                        <span className="text-[8px] font-medium mt-0.5">Add</span>
+                      </button>
+
+                      {/* Hold */}
+                      <button
+                        onClick={() => setIsOnHold(!isOnHold)}
+                        className={cn(
+                          'w-14 h-14 rounded-full flex flex-col items-center justify-center mx-auto transition-colors border focus:outline-none',
+                          isOnHold
+                            ? 'bg-white text-zinc-900 border-white'
+                            : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700'
+                        )}
+                      >
+                        <Pause className="w-5 h-5" />
+                        <span className="text-[8px] font-medium mt-0.5">Hold</span>
+                      </button>
+
+                      {/* Inspect Telemetry */}
+                      <button
+                        onClick={() => setShowForensicDetails(!showForensicDetails)}
+                        className={cn(
+                          'w-14 h-14 rounded-full flex flex-col items-center justify-center mx-auto transition-colors border focus:outline-none',
+                          showForensicDetails
+                            ? 'bg-white text-zinc-900 border-white'
+                            : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700'
+                        )}
+                      >
+                        <Shield className="w-5 h-5" />
+                        <span className="text-[8px] font-medium mt-0.5">Inspect</span>
+                      </button>
+                    </div>
+                  )}
 
                   {/* End Call Button */}
                   <div className="flex justify-center pt-3 pb-1">
@@ -931,24 +1140,66 @@ export const PhoneDialer: React.FC<PhoneDialerProps> = ({ onOpenSoc }) => {
                     </p>
 
                     {/* Summary KPI Grid inside phone */}
-                    <div className="grid grid-cols-2 gap-2 mt-4 text-left">
-                      <div className="p-2.5 rounded-lg bg-zinc-800/80 border border-zinc-700">
+                    <div className="grid grid-cols-2 gap-2 mt-3 text-left">
+                      <div className="p-2 rounded-lg bg-zinc-800/80 border border-zinc-700">
                         <span className="text-[9px] font-mono text-zinc-400 uppercase block">
                           Mean AI Score
                         </span>
-                        <span className="text-lg font-bold font-mono text-white">
+                        <span className="text-base font-bold font-mono text-white">
                           {Math.round((sessionSummary?.meanScore || localRiskEvent.composite_risk_score) * 100)}%
                         </span>
                       </div>
-                      <div className="p-2.5 rounded-lg bg-zinc-800/80 border border-zinc-700">
+                      <div className="p-2 rounded-lg bg-zinc-800/80 border border-zinc-700">
                         <span className="text-[9px] font-mono text-zinc-400 uppercase block">
                           Human Baseline
                         </span>
-                        <span className="text-lg font-bold font-mono text-white">
+                        <span className="text-base font-bold font-mono text-white">
                           {100 - Math.round((sessionSummary?.meanScore || localRiskEvent.composite_risk_score) * 100)}%
                         </span>
                       </div>
                     </div>
+
+                    {/* =============================================================
+                        GEMINI 3.5 FLASH LITE SUMMARY CARD (When Handled to AI)
+                       ============================================================= */}
+                    {aiInterventionMode === 'handling_to_ai' && (
+                      <div className="mt-3 p-3 rounded-lg bg-indigo-950/80 border border-indigo-500/50 text-left">
+                        <div className="flex items-center justify-between pb-1 mb-1.5 border-b border-indigo-500/30">
+                          <span className="text-[9px] font-bold uppercase tracking-wider text-indigo-300 flex items-center gap-1">
+                            <Sparkles className="w-3 h-3 text-indigo-400" />
+                            Gemini 3.5 Flash Lite Summary
+                          </span>
+                          <span className="text-[8px] font-mono px-1 rounded bg-indigo-900 text-indigo-200">
+                            Ultra-Crisp
+                          </span>
+                        </div>
+
+                        {isSummarizing ? (
+                          <div className="py-2 text-center text-indigo-300 text-[10px] font-mono animate-pulse">
+                            Gemini 3.5 Flash Lite analyzing transcript...
+                          </div>
+                        ) : aiSummary ? (
+                          <div className="space-y-1.5 text-[10px]">
+                            <div>
+                              <span className="font-bold text-white block text-[11px]">
+                                {aiSummary.summary.headline}
+                              </span>
+                              <span className="text-indigo-200 block text-[9px] mt-0.5">
+                                Persona: <strong className="text-zinc-100">{aiSummary.summary.callerPersona}</strong>
+                              </span>
+                            </div>
+                            <div className="p-1.5 rounded bg-black/40 border border-indigo-500/20 text-zinc-300 text-[9px]">
+                              <p><strong>Solicited:</strong> {aiSummary.summary.infoSolicited}</p>
+                              <p className="text-rose-300 mt-0.5"><strong>Action:</strong> {aiSummary.summary.actionRecommended}</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-[9px] text-zinc-400">
+                            Summary will generate upon final transcript evaluation.
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Redial & Action Buttons */}
@@ -1232,6 +1483,145 @@ export const PhoneDialer: React.FC<PhoneDialerProps> = ({ onOpenSoc }) => {
                     <span className="font-bold font-mono text-zinc-800">
                       {((localRiskEvent.metrics_breakdown?.spectral_rolloff_anomaly || 0) * 100).toFixed(1)}%
                     </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
+
+          {/* =========================================================================
+              Card 3: Gemini AI Defense Sentinel & Live Transcription Feed
+             ========================================================================= */}
+          <Card className="p-5 bg-white border border-zinc-300 rounded-xl shadow-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-200">
+              <div className="flex items-center gap-2">
+                <Bot className="w-4 h-4 text-indigo-600" />
+                <h3 className="text-sm font-bold text-zinc-900 tracking-tight">
+                  Gemini AI Call Sentinel & Live Transcription
+                </h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    'text-[10px] font-mono',
+                    isDialerConnected
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                      : 'bg-zinc-50 text-zinc-500 border-zinc-300'
+                  )}
+                >
+                  {isDialerConnected ? 'WS Connected' : 'Dialer Ready'}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    'text-[10px] font-mono',
+                    aiInterventionMode === 'handling_to_ai'
+                      ? 'bg-indigo-50 text-indigo-700 border-indigo-300 font-bold'
+                      : 'bg-zinc-50 text-zinc-600 border-zinc-300'
+                  )}
+                >
+                  {aiInterventionMode === 'handling_to_ai'
+                    ? 'AI Sentinel Active'
+                    : aiInterventionMode === 'listening'
+                    ? 'Passive Listener'
+                    : 'Monitoring'}
+                </Badge>
+              </div>
+            </div>
+
+            <div className="mt-3">
+              {/* Models Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg bg-zinc-50 border border-zinc-200 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono text-zinc-500">Live Speech Model:</span>
+                  <span className="font-mono font-bold text-indigo-900 text-[11px]">
+                    {liveModel}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono text-zinc-500">Summarization Model:</span>
+                  <span className="font-mono font-bold text-indigo-900 text-[11px]">
+                    Gemini 3.5 Flash Lite
+                  </span>
+                </div>
+              </div>
+
+              {/* Live Streaming Transcript */}
+              <div className="mt-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs font-bold text-zinc-800 flex items-center gap-1.5">
+                    <MessageSquareQuote className="w-3.5 h-3.5 text-zinc-600" />
+                    Live Audio Transcription Feed
+                  </span>
+                  {aiInterventionMode === 'handling_to_ai' && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono text-emerald-600">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      Streaming Chunks via Node.js
+                    </span>
+                  )}
+                </div>
+
+                <div className="p-3 rounded-lg bg-zinc-900 text-zinc-200 font-mono text-xs min-h-[90px] max-h-[140px] overflow-y-auto leading-relaxed border border-zinc-800">
+                  {liveTranscript ? (
+                    <p className="whitespace-pre-wrap">{liveTranscript}</p>
+                  ) : (
+                    <p className="text-zinc-500 italic text-[11px]">
+                      {aiInterventionMode === 'handling_to_ai'
+                        ? 'Connecting stream to Gemini Live API and receiving transcription deltas...'
+                        : 'Transcripts will appear here when an AI call is detected and handed over to AI defense.'}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Gemini 3.5 Flash Lite Summary Section */}
+              {aiSummary && (
+                <div className="mt-4 p-4 rounded-xl bg-indigo-50/80 border border-indigo-200 text-left">
+                  <div className="flex items-center justify-between pb-2 border-b border-indigo-200">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-indigo-600" />
+                      <h4 className="text-xs font-bold text-indigo-950 uppercase tracking-wider">
+                        Gemini 3.5 Flash Lite — Call Forensic Summary
+                      </h4>
+                    </div>
+                    <Badge variant="outline" className="text-[9px] font-mono bg-white text-indigo-800 border-indigo-300">
+                      {aiSummary.modelUsed}
+                    </Badge>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    <div className="text-sm font-bold text-zinc-900">
+                      {aiSummary.summary.headline}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                      <div className="p-2 rounded bg-white border border-indigo-100">
+                        <span className="text-[10px] font-mono text-zinc-500 block">Claimed Identity:</span>
+                        <span className="font-semibold text-zinc-900">{aiSummary.summary.callerPersona}</span>
+                      </div>
+                      <div className="p-2 rounded bg-white border border-indigo-100">
+                        <span className="text-[10px] font-mono text-zinc-500 block">Information Solicited:</span>
+                        <span className="font-semibold text-rose-700">{aiSummary.summary.infoSolicited}</span>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 rounded bg-white border border-indigo-100 text-xs">
+                      <span className="text-[10px] font-mono text-zinc-500 block mb-1">Key Findings:</span>
+                      <ul className="list-disc list-inside space-y-1 text-zinc-700">
+                        {aiSummary.summary.bulletPoints?.map((bp, idx) => (
+                          <li key={idx}>{bp}</li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className="p-2.5 rounded bg-rose-50 border border-rose-200 text-xs flex items-center gap-2">
+                      <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+                      <div>
+                        <span className="text-[10px] font-mono font-bold text-rose-700 uppercase block">Action Directive:</span>
+                        <span className="font-medium text-rose-900">{aiSummary.summary.actionRecommended}</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
