@@ -122,6 +122,11 @@ def test_websocket_stream_lifecycle(client):
         assert context_resp["event"] == "context_updated"
         assert context_resp["codec"] == "g711_ulaw"
 
+        # Immediate risk update broadcast with updated context boost
+        immediate_risk = websocket.receive_json()
+        assert immediate_risk["event"] == "risk_update"
+        assert immediate_risk["data"]["call_id"] == "test-call-001"
+
         # 3. Stream 250ms Audio Frame (4000 int16 samples = 8000 bytes)
         t = np.linspace(0, 0.25, 4000, endpoint=False)
         tone = (np.sin(2 * np.pi * 300 * t) * 16384).astype(np.int16)

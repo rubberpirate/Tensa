@@ -172,6 +172,7 @@ def _update_context(session: CallSession, msg: dict) -> None:
     codec = meta.get("codec") or payload.get("codec")
     if codec:
         session.codec = str(codec).lower()
+    session.risk_engine._context_boost_result = None
 
 
 async def _process_audio_chunk(
