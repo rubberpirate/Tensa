@@ -5,25 +5,31 @@
 set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VENV="$REPO_ROOT/.venv/bin"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  🛡️  Project Tensa — Starting All Services"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+# ── Detect Python Interpreter ──────────────────────────────────────────
+PYTHON_BIN=""
+if [ -n "$VIRTUAL_ENV" ] && [ -x "$VIRTUAL_ENV/bin/python" ]; then
+    PYTHON_BIN="$VIRTUAL_ENV/bin/python"
+elif [ -x "$REPO_ROOT/.venv/bin/python" ]; then
+    PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
+elif [ -x "$REPO_ROOT/detection-model/venv/bin/python" ]; then
+    PYTHON_BIN="$REPO_ROOT/detection-model/venv/bin/python"
+elif [ -x "$HOME/model-test/venv/bin/python" ]; then
+    PYTHON_BIN="$HOME/model-test/venv/bin/python"
+elif command -v uv >/dev/null 2>&1; then
+    PYTHON_BIN="uv run python"
+else
+    PYTHON_BIN="$(command -v python3 || command -v python)"
+fi
+
 # ── Backend ────────────────────────────────────────────────────────────
 echo ""
-echo "► Starting FastAPI backend on http://localhost:8000 ..."
-cd "$REPO_ROOT/backend"
-
-# Add detection-model to PYTHONPATH for imports
-export PYTHONPATH="$REPO_ROOT/detection-model:$REPO_ROOT/backend:$PYTHONPATH"
-
-"$VENV/uvicorn" app.main:app \
-    --host 0.0.0.0 \
-    --port 8000 \
-    --reload \
-    --log-level info &
+echo "► Starting FastAPI backend on http://localhost:8000 via $PYTHON_BIN ..."
+$PYTHON_BIN "$REPO_ROOT/backend/run.py" --host 0.0.0.0 --port 8000 --reload &
 
 BACKEND_PID=$!
 echo "  Backend PID: $BACKEND_PID"
@@ -38,7 +44,7 @@ if [ -d "$REPO_ROOT/frontend/node_modules" ]; then
     echo "  Frontend PID: $FRONTEND_PID"
 else
     echo ""
-    echo "⚠ Frontend not installed. Run: cd frontend && npm install"
+    echo "⚠ Frontend node_modules not detected. Run: cd frontend && npm install"
 fi
 
 echo ""

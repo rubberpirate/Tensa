@@ -89,7 +89,16 @@ In strict accordance with the **Digital Personal Data Protection (DPDP) Act 2023
 - Node.js v20+ & npm
 - CUDA 12.0+ (optional for GPU acceleration; runs on CPU fallback automatically)
 
-### 2. Launch All Services (Backend + Frontend)
+### 2. Launch Backend Only
+```bash
+# Option A: Fast CLI launcher (auto-configures environment & paths)
+python backend/run.py --reload
+
+# Option B: Standard Uvicorn
+cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 3. Launch All Services (Backend + Frontend)
 ```bash
 ./scripts/start.sh
 ```
@@ -97,13 +106,13 @@ In strict accordance with the **Digital Personal Data Protection (DPDP) Act 2023
 - **SOC Dashboard**: [http://localhost:5173](http://localhost:5173)
 - **FastAPI Backend**: [http://localhost:8000](http://localhost:8000)
 - **Interactive API Docs (Swagger)**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **WebSocket Streaming Route**: `ws://localhost:8000/api/v1/stream`
+- **WebSocket Streaming Route**: `ws://localhost:8000/v1/stream/detect`
 
 ---
 
 ## Testing & Verification
 
-### Run Complete Unit Test Suite (17 Tests)
+### Run Complete Unit Test Suite (23 Tests)
 ```bash
 .venv/bin/pytest backend/tests -v
 ```
@@ -137,28 +146,37 @@ curl -s -X POST -F "file=@detection-model/samp.mp3" http://localhost:8000/v1/det
 tensa/
 ├── backend/
 │   ├── app/
-│   │   ├── api/          # WebSocket & REST endpoints (DPDP compliant)
-│   │   ├── codecs/       # Telephony degradation simulator (G.711, AMR-NB, G.722)
-│   │   ├── core/         # Config & Ephemeral RAM ring buffer (ctypes zero-scrubbing)
-│   │   ├── dsp/          # Tier-1 DSP heuristics (<14ms CPU: bicoherence, phase, jitter)
-│   │   ├── models/       # VAD & Tier-2 async neural inference bridge
-│   │   ├── risk/         # Bayesian filter & enterprise contextual booster
-│   │   └── main.py       # FastAPI application entry point
-│   ├── tests/            # Test suite (DSP, ring buffer, Bayesian, Wav2Vec2, RTF benchmark)
-│   └── pyproject.toml    # Backend packaging & dependencies
+│   │   ├── api/
+│   │   │   └── v1/
+│   │   │       ├── endpoints/ # health, config, detect, stream (WebSocket)
+│   │   │       └── router.py  # Consolidated v1 APIRouter
+│   │   ├── codecs/            # Telephony degradation simulator (G.711, AMR-NB, G.722)
+│   │   ├── core/              # Config, exceptions, lifespan, and ephemeral ring buffer
+│   │   ├── dsp/               # Tier-1 DSP heuristics (<14ms CPU: bicoherence, phase, jitter)
+│   │   ├── models/            # VAD & Tier-2 async neural inference bridge
+│   │   ├── risk/              # Bayesian filter & enterprise contextual booster
+│   │   ├── schemas/           # Pydantic v2 data models for API & WebSocket protocol
+│   │   ├── services/          # AudioProcessor & SessionManager (DPDP zero-scrubbing)
+│   │   ├── dependencies.py    # FastAPI Depends() providers
+│   │   └── main.py            # FastAPI application factory & entry point
+│   ├── tests/                 # Test suite (API, DSP, ring buffer, Bayesian, Wav2Vec2)
+│   ├── run.py                 # Single-command CLI runner
+│   └── pyproject.toml         # Backend packaging & dependencies
 ├── detection-model/
-│   ├── detect.py         # In-memory FP16 array inference
-│   ├── model_runner.py   # Streaming detector with CNN cache & dynamic batching
-│   ├── optimize.py       # ONNX export & latency benchmark pipeline
-│   ├── output.wav        # Genuine human reference audio
-│   └── samp.mp3          # Synthesized voice clone reference audio
+│   ├── detect.py              # In-memory FP16 array inference
+│   ├── model_runner.py        # Streaming detector with CNN cache & dynamic batching
+│   ├── optimize.py            # ONNX export & latency benchmark pipeline
+│   ├── output.wav             # Genuine human reference audio
+│   └── samp.mp3               # Synthesized voice clone reference audio
 ├── frontend/
 │   ├── src/
-│   │   ├── components/   # RiskGauge, Oscilloscope, Radar, BankingTerminal, CodecToggle
-│   │   ├── hooks/        # useAudioStream (Web Audio API) & useWebSocket
-│   │   ├── App.tsx       # Master SOC Cyber Dashboard
-│   │   └── index.css     # Glassmorphism dark-mode theme & tokens
+│   │   ├── components/        # RiskGauge, Oscilloscope, Radar, BankingTerminal, CodecToggle
+│   │   ├── hooks/             # useAudioStream (Web Audio API) & useWebSocket
+│   │   ├── App.tsx            # Master SOC Cyber Dashboard
+│   │   └── index.css          # Glassmorphism dark-mode theme & tokens
 │   └── package.json
+├── run_backend.py             # Root convenience runner
 └── scripts/
-    └── start.sh          # Unified service orchestrator
+    └── start.sh               # Unified service orchestrator
 ```
+

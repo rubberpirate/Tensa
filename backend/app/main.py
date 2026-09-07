@@ -4,60 +4,78 @@ main.py — Tensa FastAPI Application Entry Point
 
 from __future__ import annotations
 
-import asyncio
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI
+import time
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1.endpoints.stream import stream_audio_ws
+from app.api.v1.router import api_v1_router
 from app.core.config import settings
-from app.api.endpoints import router as api_router
-from app.api.websocket import stream_audio_ws
-from app.models.tier2_engine import get_tier2_engine
+from app.core.exceptions import TensaException, tensa_exception_handler
+from app.core.lifespan import lifespan
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    Startup: pre-load the Tier-2 neural model into GPU memory.
-    Shutdown: clean up executor threads.
-    """
-    print("[Tensa] Starting up — warming GPU model...", flush=True)
-    tier2 = get_tier2_engine()
-    asyncio.create_task(tier2.load())  # non-blocking warm-up
-    yield
-    print("[Tensa] Shutting down.", flush=True)
+def create_app() -> FastAPI:
+    """Factory function to build and configure the FastAPI application."""
+    application = FastAPI(
+        title="Tensa Voice Integrity API",
+        description="Real-Time AI-Powered Voice Cloning Detection Engine — SIH 2026",
+        version="0.1.0",
+        docs_url="/docs",
+        redoc_url="/redoc",
+        lifespan=lifespan,
+    )
+
+    # ── Middleware ───────────────────────────────────────────────────
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @application.middleware("http")
+    async def add_process_time_header(request: Request, call_next):
+        start_time = time.perf_counter()
+        response = await call_next(request)
+        process_time_ms = (time.perf_counter() - start_time) * 1000.0
+        response.headers["X-Process-Time"] = f"{process_time_ms:.2f}ms"
+        return response
+
+    # ── Exception Handlers ───────────────────────────────────────────
+    application.add_exception_handler(TensaException, tensa_exception_handler)
+
+    # ── Routers ──────────────────────────────────────────────────────
+    application.include_router(api_v1_router)
+
+    # Backward-compatibility alias for legacy WebSocket route
+    application.add_api_websocket_route("/api/v1/stream", stream_audio_ws)
+
+    # ── Root System Info ─────────────────────────────────────────────
+    @application.get("/", tags=["System"], summary="Root Information")
+    async def root():
+        return {
+            "service": "Tensa Voice Integrity Engine",
+            "version": "0.1.0",
+            "docs": "/docs",
+            "websocket": "/v1/stream/detect",
+        }
+
+    return application
 
 
-app = FastAPI(
-    title="Tensa Voice Integrity API",
-    description="Real-Time AI-Powered Voice Cloning Detection Engine — SIH 2026",
-    version="0.1.0",
-    lifespan=lifespan,
-)
-
-# CORS — allow frontend dev server and production origins
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# REST routes
-app.include_router(api_router)
-
-# WebSocket routes
-app.add_api_websocket_route("/v1/stream/detect", stream_audio_ws)
-app.add_api_websocket_route("/api/v1/stream", stream_audio_ws)
+# Global FastAPI application instance
+app = create_app()
 
 
-@app.get("/")
-async def root():
-    return {
-        "service": "Tensa Voice Integrity Engine",
-        "version": "0.1.0",
-        "docs": "/docs",
-        "websocket": "wss://<host>/v1/stream/detect",
-    }
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "app.main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=True,
+        log_level="info",
+    )
