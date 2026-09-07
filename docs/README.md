@@ -1,4 +1,4 @@
-# 🇮🇳 Project Tensa (Voice Integrity & Anti-Spoofing Engine)
+# Project Tensa (Voice Integrity & Anti-Spoofing Engine)
 ## SIH 2026 Comprehensive Architecture & Strategy Suite
 
 Welcome to the architectural and technical specification documentation for the **AI-Powered Real-Time Detection and Prevention of Voice Cloning Impersonation Attacks** project, designed for **Smart India Hackathon (SIH)**.
@@ -7,7 +7,7 @@ This repository documentation is designed to give you a modular, battle-tested, 
 
 ---
 
-## 📑 Documentation Index
+## Documentation Index
 
 | File | Document Title | Focus Area |
 |---|---|---|
@@ -21,7 +21,7 @@ This repository documentation is designed to give you a modular, battle-tested, 
 
 ---
 
-## 🎯 Executive Summary of the Solution
+## Executive Summary of the Solution
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
