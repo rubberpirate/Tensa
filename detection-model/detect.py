@@ -16,6 +16,9 @@ from __future__ import annotations
 import argparse
 import collections
 import os
+import pickle
+import socket
+import struct
 import sys
 import time
 from collections import deque
@@ -364,6 +367,79 @@ _global_resampler: Optional[AudioResampler] = None
 _global_silence_detector: Optional[AudioSilenceDetector] = None
 
 
+def send_ipc_msg(sock: socket.socket, data: any) -> None:
+    payload = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
+    sock.sendall(struct.pack("!I", len(payload)) + payload)
+
+
+def recv_ipc_msg(sock: socket.socket) -> any:
+    raw_len = sock.recv(4)
+    if not raw_len or len(raw_len) < 4:
+        return None
+    msg_len = struct.unpack("!I", raw_len)[0]
+    data = bytearray()
+    while len(data) < msg_len:
+        packet = sock.recv(min(65536, msg_len - len(data)))
+        if not packet:
+            return None
+        data.extend(packet)
+    return pickle.loads(bytes(data))
+
+
+class PreloadedEngineClient:
+    """Client proxy for communicating with the model preloader daemon."""
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 50000):
+        self.host = host
+        self.port = port
+        self.sock: Optional[socket.socket] = None
+
+    def connect(self) -> bool:
+        if self.sock is not None:
+            return True
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2.0)
+            sock.connect((self.host, self.port))
+            send_ipc_msg(sock, {"cmd": "ping"})
+            resp = recv_ipc_msg(sock)
+            if resp and resp.get("status") == "ok":
+                self.sock = sock
+                return True
+            sock.close()
+            return False
+        except (ConnectionRefusedError, socket.timeout, OSError):
+            return False
+
+    def predict(self, audio_chunk: np.ndarray) -> Tuple[float, float]:
+        if not self.connect():
+            raise RuntimeError("Preloaded model server disconnected")
+        try:
+            send_ipc_msg(self.sock, {"cmd": "predict", "audio_chunk": audio_chunk})
+            resp = recv_ipc_msg(self.sock)
+            if resp and resp.get("status") == "ok":
+                return resp["result"]
+            raise RuntimeError(f"Preloaded server error: {resp}")
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            self.sock = None
+            raise
+
+    def close(self) -> None:
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
+
+
+def _get_preloaded_client(host: str = "127.0.0.1", port: int = 50000) -> Optional[PreloadedEngineClient]:
+    client = PreloadedEngineClient(host=host, port=port)
+    if client.connect():
+        return client
+    return None
+
+
 def _get_pytorch_engine(use_compile: bool = False) -> PyTorchInferenceEngine:
     global _global_pytorch_engine
     if _global_pytorch_engine is None:
@@ -401,23 +477,28 @@ def detect_array(audio_array: np.ndarray, sample_rate: int = AUDIO_SAMPLE_RATE) 
     Returns:
         dict with keys: prediction, prob_real, prob_fake, confidence, latency_ms
     """
-    engine = _get_pytorch_engine()
+    preloaded = _get_preloaded_client()
+    engine = preloaded if preloaded is not None else _get_pytorch_engine()
     resampler = _get_resampler()
 
-    if sample_rate != AUDIO_SAMPLE_RATE:
-        audio_array = resampler.resample(audio_array, source_sample_rate=sample_rate)
+    try:
+        if sample_rate != AUDIO_SAMPLE_RATE:
+            audio_array = resampler.resample(audio_array, source_sample_rate=sample_rate)
 
-    ai_prob, latency_ms = engine.predict(audio_array)
-    real_prob = 1.0 - ai_prob
-    prediction = "FAKE" if ai_prob >= 0.5 else "REAL"
+        ai_prob, latency_ms = engine.predict(audio_array)
+        real_prob = 1.0 - ai_prob
+        prediction = "FAKE" if ai_prob >= 0.5 else "REAL"
 
-    return {
-        "prediction": prediction,
-        "prob_real": real_prob,
-        "prob_fake": ai_prob,
-        "confidence": max(ai_prob, real_prob),
-        "latency_ms": latency_ms,
-    }
+        return {
+            "prediction": prediction,
+            "prob_real": real_prob,
+            "prob_fake": ai_prob,
+            "confidence": max(ai_prob, real_prob),
+            "latency_ms": latency_ms,
+        }
+    finally:
+        if isinstance(engine, PreloadedEngineClient):
+            engine.close()
 
 
 # ---------------------------------------------------------------------------
@@ -502,102 +583,111 @@ def detect(
             sys.exit(1)
         engine = ONNXInferenceEngine(onnx_path=onnx_path)
     else:
-        engine = _get_pytorch_engine(use_compile=use_compile)
+        preloaded_client = _get_preloaded_client()
+        if preloaded_client is not None:
+            print("--> Reusing preloaded model weights from memory.")
+            engine = preloaded_client
+        else:
+            engine = _get_pytorch_engine(use_compile=use_compile)
 
-    decision_engine = DecisionEngine()
-    silence_detector = _get_silence_detector()
-    win_samples = int(window_seconds * AUDIO_SAMPLE_RATE)
-    hop_samples = int(stride_seconds * AUDIO_SAMPLE_RATE)
+    try:
+        decision_engine = DecisionEngine()
+        silence_detector = _get_silence_detector()
+        win_samples = int(window_seconds * AUDIO_SAMPLE_RATE)
+        hop_samples = int(stride_seconds * AUDIO_SAMPLE_RATE)
 
-    # Pad if shorter than window
-    if len(audio_16k) < win_samples:
-        padded = np.zeros(win_samples, dtype=np.float32)
-        padded[: len(audio_16k)] = audio_16k
-        audio_16k = padded
+        # Pad if shorter than window
+        if len(audio_16k) < win_samples:
+            padded = np.zeros(win_samples, dtype=np.float32)
+            padded[: len(audio_16k)] = audio_16k
+            audio_16k = padded
 
-    total_chunks = 0
-    silent_chunks = 0
-    active_chunks = 0
+        total_chunks = 0
+        silent_chunks = 0
+        active_chunks = 0
 
-    start_idx = 0
-    print("\n" + "-" * 75)
-    print(f"{'Time Window':<16} | {'Raw AI Score':<14} | {'EMA Score':<12} | {'Latency':<10} | {'Status':<8}")
-    print("-" * 75)
+        start_idx = 0
+        print("\n" + "-" * 75)
+        print(f"{'Time Window':<16} | {'Raw AI Score':<14} | {'EMA Score':<12} | {'Latency':<10} | {'Status':<8}")
+        print("-" * 75)
 
-    window_results = []
-    t_start_all = time.perf_counter()
+        window_results = []
+        t_start_all = time.perf_counter()
 
-    while start_idx + win_samples <= len(audio_16k):
-        total_chunks += 1
-        chunk = audio_16k[start_idx : start_idx + win_samples]
+        while start_idx + win_samples <= len(audio_16k):
+            total_chunks += 1
+            chunk = audio_16k[start_idx : start_idx + win_samples]
 
-        t_win_start = start_idx / AUDIO_SAMPLE_RATE
-        t_win_end = (start_idx + win_samples) / AUDIO_SAMPLE_RATE
-        window_str = f"{t_win_start:.1f}s - {t_win_end:.1f}s"
+            t_win_start = start_idx / AUDIO_SAMPLE_RATE
+            t_win_end = (start_idx + win_samples) / AUDIO_SAMPLE_RATE
+            window_str = f"{t_win_start:.1f}s - {t_win_end:.1f}s"
 
-        # Check if 3-second chunk is empty / silent before running model
-        is_empty, dbfs = silence_detector.is_empty(chunk)
-        if is_empty:
-            silent_chunks += 1
-            print(f"{window_str:<16} | {'[EMPTY/SILENT]':<14} | {decision_engine.ema_score:<12.2%} | {'0.0ms':<8} | {'SILENT':<8}")
+            # Check if 3-second chunk is empty / silent before running model
+            is_empty, dbfs = silence_detector.is_empty(chunk)
+            if is_empty:
+                silent_chunks += 1
+                print(f"{window_str:<16} | {'[EMPTY/SILENT]':<14} | {decision_engine.ema_score:<12.2%} | {'0.0ms':<8} | {'SILENT':<8}")
+                window_results.append({
+                    "window": window_str,
+                    "raw_ai_score": None,
+                    "ema_score": decision_engine.ema_score,
+                    "latency_ms": 0.0,
+                    "status": "SILENT",
+                })
+                start_idx += hop_samples
+                continue
+
+            active_chunks += 1
+            raw_ai_score, latency_ms = engine.predict(chunk)
+            status, ema_score = decision_engine.update(raw_ai_score)
+
+            print(f"{window_str:<16} | {raw_ai_score:<14.2%} | {ema_score:<12.2%} | {latency_ms:<8.1f}ms | {status.upper():<8}")
             window_results.append({
                 "window": window_str,
-                "raw_ai_score": None,
-                "ema_score": decision_engine.ema_score,
-                "latency_ms": 0.0,
-                "status": "SILENT",
+                "raw_ai_score": raw_ai_score,
+                "ema_score": ema_score,
+                "latency_ms": latency_ms,
+                "status": status,
             })
             start_idx += hop_samples
-            continue
 
-        active_chunks += 1
-        raw_ai_score, latency_ms = engine.predict(chunk)
-        status, ema_score = decision_engine.update(raw_ai_score)
+        total_latency_ms = (time.perf_counter() - t_start_all) * 1000.0
+        print("-" * 75 + "\n")
 
-        print(f"{window_str:<16} | {raw_ai_score:<14.2%} | {ema_score:<12.2%} | {latency_ms:<8.1f}ms | {status.upper():<8}")
-        window_results.append({
-            "window": window_str,
-            "raw_ai_score": raw_ai_score,
-            "ema_score": ema_score,
-            "latency_ms": latency_ms,
-            "status": status,
-        })
-        start_idx += hop_samples
+        status_label = decision_engine.current_status.upper()
+        if status_label == "UNKNOWN":
+            status_label = "AI" if decision_engine.ema_score >= AI_THRESHOLD else ("HUMAN" if decision_engine.ema_score <= HUMAN_THRESHOLD else "UNCERTAIN")
 
-    total_latency_ms = (time.perf_counter() - t_start_all) * 1000.0
-    print("-" * 75 + "\n")
+        total_sec, active_sec, trimmed_sec = get_audio_durations(audio_16k, silence_detector)
+        active_pct = (active_sec / total_sec * 100.0) if total_sec > 0 else 0.0
 
-    status_label = decision_engine.current_status.upper()
-    if status_label == "UNKNOWN":
-        status_label = "AI" if decision_engine.ema_score >= AI_THRESHOLD else ("HUMAN" if decision_engine.ema_score <= HUMAN_THRESHOLD else "UNCERTAIN")
+        final_prediction = "FAKE" if decision_engine.ema_score >= 0.5 else "REAL"
+        prob_fake = decision_engine.ema_score
+        prob_real = 1.0 - prob_fake
 
-    total_sec, active_sec, trimmed_sec = get_audio_durations(audio_16k, silence_detector)
-    active_pct = (active_sec / total_sec * 100.0) if total_sec > 0 else 0.0
+        print(f"File:                      {audio_path}")
+        print(f"Original Audio Duration:   {total_sec:.2f}s")
+        print(f"Active (Processed) Audio:  {active_sec:.2f}s ({active_pct:.1f}%)")
+        print(f"Final Call Status:         {status_label} ({final_prediction})")
+        print(f"Final Smoothed AI Score:   {prob_fake:.2%}")
+        print(f"Final Human/Real Score:    {prob_real:.2%}")
+        print(f"Total Processing Time:     {total_latency_ms:.1f} ms")
 
-    final_prediction = "FAKE" if decision_engine.ema_score >= 0.5 else "REAL"
-    prob_fake = decision_engine.ema_score
-    prob_real = 1.0 - prob_fake
-
-    print(f"File:                      {audio_path}")
-    print(f"Original Audio Duration:   {total_sec:.2f}s")
-    print(f"Active (Processed) Audio:  {active_sec:.2f}s ({active_pct:.1f}%)")
-    print(f"Final Call Status:         {status_label} ({final_prediction})")
-    print(f"Final Smoothed AI Score:   {prob_fake:.2%}")
-    print(f"Final Human/Real Score:    {prob_real:.2%}")
-    print(f"Total Processing Time:     {total_latency_ms:.1f} ms")
-
-    return {
-        "prediction": final_prediction,
-        "prob_real": prob_real,
-        "prob_fake": prob_fake,
-        "confidence": max(prob_fake, prob_real),
-        "status": status_label,
-        "ema_score": prob_fake,
-        "latency_ms": total_latency_ms,
-        "active_duration_sec": active_sec,
-        "total_duration_sec": total_sec,
-        "windows": window_results,
-    }
+        return {
+            "prediction": final_prediction,
+            "prob_real": prob_real,
+            "prob_fake": prob_fake,
+            "confidence": max(prob_fake, prob_real),
+            "status": status_label,
+            "ema_score": prob_fake,
+            "latency_ms": total_latency_ms,
+            "active_duration_sec": active_sec,
+            "total_duration_sec": total_sec,
+            "windows": window_results,
+        }
+    finally:
+        if isinstance(engine, PreloadedEngineClient):
+            engine.close()
 
 
 # ---------------------------------------------------------------------------
