@@ -111,7 +111,7 @@ async def stream_audio_ws(websocket: WebSocket) -> None:
                 if event == "session_init":
                     session = _handle_session_init(msg)
                     _sessions[session.call_id] = session
-                    await get_tier2_engine().load()  # warm up GPU model (non-blocking)
+                    asyncio.create_task(get_tier2_engine().load())  # warm up GPU model (non-blocking)
                     await websocket.send_json({
                         "event": "session_ready",
                         "call_id": session.call_id,
@@ -138,6 +138,11 @@ async def stream_audio_ws(websocket: WebSocket) -> None:
                             "codec": session.codec,
                             "status": "ok",
                         })
+
+                        # Broadcast immediate risk update with new context boost
+                        risk_event = session.risk_engine.current_event()
+                        if risk_event:
+                            await websocket.send_json(_risk_event_to_dict(risk_event, session))
 
                 elif event == "session_end":
                     if session:

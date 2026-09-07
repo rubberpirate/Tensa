@@ -1,5 +1,7 @@
 import React from 'react';
-import { Radio, Zap, Cpu, CheckCircle2 } from 'lucide-react';
+import { Radio, Zap, Cpu, CheckCircle2, WifiOff } from 'lucide-react';
+import { Card } from './ui/card';
+import { Badge } from './ui/badge';
 
 interface CallMetadataPanelProps {
   callId: string;
@@ -26,83 +28,75 @@ export const CallMetadataPanel: React.FC<CallMetadataPanelProps> = ({
 
   const metrics = [
     {
-      icon: <Radio size={18} color="var(--color-primary)" />,
+      icon: <Radio className="w-4 h-4 text-blue-600" />,
       label: 'Call Session',
-      value: `ID: ${callId.slice(0, 10)}`,
-      detail: `${formatTime(durationSeconds)} • ${bayesianWindowCount} windows`,
-      iconBg: 'var(--color-primary-light)',
+      value: `#${callId.slice(0, 10)}`,
+      detail: `${formatTime(durationSeconds)} elapsed • ${bayesianWindowCount} windows`,
+      iconBg: 'bg-blue-50 border-blue-100',
+      badge: 'Active Call',
+      badgeVariant: 'info' as const,
     },
     {
-      icon: <Zap size={18} color="#0284c7" />,
+      icon: <Zap className="w-4 h-4 text-sky-600" />,
       label: 'Processing Latency',
       value: tier1LatencyMs > 0 ? `${tier1LatencyMs.toFixed(1)} ms` : 'Idle (<40ms budget)',
       detail: tier2LatencyMs ? `Deep GPU: ${tier2LatencyMs.toFixed(1)}ms` : 'Real-time DSP stream',
-      iconBg: '#f0f9ff',
+      iconBg: 'bg-sky-50 border-sky-100',
+      badge: tier1LatencyMs > 0 ? `${tier1LatencyMs.toFixed(0)}ms Tier-1` : '<40ms',
+      badgeVariant: 'secondary' as const,
     },
     {
-      icon: <Cpu size={18} color="#4f46e5" />,
+      icon: <Cpu className="w-4 h-4 text-indigo-600" />,
       label: 'Inference Pipeline',
-      value: tier2LatencyMs ? 'Dual-Tier Active' : (tier1LatencyMs > 0 ? 'Tier-1 Acoustic DSP' : 'Pipeline Ready'),
+      value: tier2LatencyMs ? 'Dual-Tier Active' : tier1LatencyMs > 0 ? 'Tier-1 Acoustic DSP' : 'Pipeline Ready',
       detail: 'Continuous frame evaluation',
-      iconBg: '#eef2ff',
+      iconBg: 'bg-indigo-50 border-indigo-100',
+      badge: 'PyTorch / DSP',
+      badgeVariant: 'secondary' as const,
     },
     {
-      icon: <CheckCircle2 size={18} color={isConnected ? 'var(--color-safe)' : 'var(--text-muted)'} />,
+      icon: isConnected ? (
+        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+      ) : (
+        <WifiOff className="w-4 h-4 text-slate-400" />
+      ),
       label: 'Engine Connection',
-      value: isConnected ? 'Live Backend Connected' : 'Engine Standby',
-      detail: isConnected ? 'FastAPI & PyTorch WebSocket' : 'Awaiting backend connection',
-      iconBg: isConnected ? 'var(--color-safe-bg)' : 'var(--bg-card-subtle)',
+      value: isConnected ? 'FastAPI Synchronized' : 'Engine Standby',
+      detail: isConnected ? 'WebSocket streaming active' : 'Awaiting socket connection',
+      iconBg: isConnected ? 'bg-emerald-50 border-emerald-100' : 'bg-slate-100 border-slate-200',
+      badge: isConnected ? 'Online' : 'Offline',
+      badgeVariant: isConnected ? ('success' as const) : ('outline' as const),
     },
   ];
 
   return (
-    <div
-      className="clean-card"
-      style={{
-        padding: '16px 20px',
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-        gap: '16px',
-      }}
-    >
-      {metrics.map((item, idx) => (
-        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+    <Card className="p-0 bg-white border-slate-200/80 shadow-xs rounded-xl overflow-hidden">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-slate-100">
+        {metrics.map((item, idx) => (
           <div
-            style={{
-              padding: '10px',
-              borderRadius: 'var(--radius-sm)',
-              background: item.iconBg,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-            }}
+            key={idx}
+            className="p-3.5 sm:p-4 flex flex-col justify-between gap-1.5 hover:bg-slate-50/50 transition-colors"
           >
-            {item.icon}
-          </div>
-          <div style={{ minWidth: 0, overflow: 'hidden' }}>
-            <div style={{ fontSize: '11px', fontWeight: 500, color: 'var(--text-muted)' }}>
-              {item.label}
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                {item.icon}
+                <span>{item.label}</span>
+              </span>
+              <Badge variant={item.badgeVariant} className="text-[10px] px-2 py-0 font-medium">
+                {item.badge}
+              </Badge>
             </div>
-            <div
-              style={{
-                fontSize: '13px',
-                fontWeight: 600,
-                color: 'var(--text-primary)',
-                fontFamily: 'var(--font-mono)',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {item.value}
-            </div>
-            <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-              {item.detail}
+            <div>
+              <span className="text-sm font-bold text-slate-900 font-mono tracking-tight block truncate">
+                {item.value}
+              </span>
+              <span className="text-[11px] text-slate-500 block truncate mt-0.5">
+                {item.detail}
+              </span>
             </div>
           </div>
-        </div>
-      ))}
-    </div>
+        ))}
+      </div>
+    </Card>
   );
 };

@@ -1,6 +1,6 @@
 /* App layout utilities */
 .app-container {
-  max-width: 1400px;
+  max-width: 1440px;
   margin: 0 auto;
   padding: 24px;
   display: flex;
@@ -15,27 +15,17 @@
   }
 }
 
-.dashboard-grid-top {
+/* Master SOC 2-Column Responsive Workspace Grid: Left Decision Rail (420px) / Right Forensic Rail (1fr) */
+.soc-workspace-grid {
   display: grid;
-  grid-template-columns: 340px 1fr;
-  gap: 20px;
+  grid-template-columns: 420px minmax(0, 1fr);
+  gap: 24px;
   align-items: stretch;
 }
 
-@media (max-width: 1024px) {
-  .dashboard-grid-top {
+@media (max-width: 1080px) {
+  .soc-workspace-grid {
     grid-template-columns: 1fr;
-  }
-}
-
-.dashboard-grid-bottom {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-}
-
-@media (max-width: 1024px) {
-  .dashboard-grid-bottom {
-    grid-template-columns: 1fr;
+    gap: 20px;
   }
 }

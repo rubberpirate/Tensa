@@ -1,56 +1,143 @@
-import React from 'react';
-import type { ThreatLevel } from '../types';
-import { ShieldCheck, ShieldAlert, AlertTriangle } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import type { ThreatLevel, SessionSummary } from '../types';
+import { ShieldAlert, AlertTriangle, Cpu, UserCheck, CheckCircle2, Shield, Activity } from 'lucide-react';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './ui/card';
+import { Badge } from './ui/badge';
 
 interface RiskGaugeProps {
-  score: number; // 0.0 to 1.0
+  score: number; // 0.0 to 1.0 (AI synthetic probability)
   threatLevel: ThreatLevel;
   actionRecommended: string;
+  isCompleted?: boolean;
+  sessionSummary?: SessionSummary | null;
 }
+
+// 5 clean, quiet calibration ticks at 0%, 25%, 50%, 75%, 100%
+const TICKS = (() => {
+  const radius = 92;
+  const cx = 120, cy = 120;
+  const startAngle = 150;
+  const sweepAngle = 240;
+  const numTicks = 4;
+  const list: { x1: number; y1: number; x2: number; y2: number }[] = [];
+
+  for (let i = 0; i <= numTicks; i++) {
+    const fraction = i / numTicks;
+    const angleDeg = startAngle + fraction * sweepAngle;
+    const rad = (angleDeg * Math.PI) / 180;
+    const rOuter = radius + 9;
+    const rInner = rOuter - 5;
+
+    list.push({
+      x1: +(cx + rOuter * Math.cos(rad)).toFixed(1),
+      y1: +(cy + rOuter * Math.sin(rad)).toFixed(1),
+      x2: +(cx + rInner * Math.cos(rad)).toFixed(1),
+      y2: +(cy + rInner * Math.sin(rad)).toFixed(1),
+    });
+  }
+  return list;
+})();
 
 export const RiskGauge: React.FC<RiskGaugeProps> = ({
   score,
   threatLevel,
   actionRecommended,
+  isCompleted = false,
+  sessionSummary = null,
 }) => {
-  const percentage = Math.round(score * 100);
+  const isSessionMean = isCompleted && sessionSummary !== null;
+  const effectiveScore = isSessionMean ? sessionSummary.meanScore : score;
+  const effectiveThreat = isSessionMean ? sessionSummary.threatLevel : threatLevel;
+  const effectiveAction = isSessionMean ? sessionSummary.actionRecommended : actionRecommended;
 
-  // SVG Gauge calculations (240 deg arc)
-  const radius = 86;
-  const strokeWidth = 12;
+  // Target AI percentage
+  const targetPercentage = Math.round(Math.min(1.0, Math.max(0.0, effectiveScore)) * 100);
+  const peakPercentage = isSessionMean
+    ? Math.round(Math.min(1.0, Math.max(0.0, sessionSummary.peakScore)) * 100)
+    : targetPercentage;
+
+  // Smooth synchronized animation for number, arc and bar
+  const [displayNumber, setDisplayNumber] = useState(targetPercentage);
+  const animRef = useRef<number | null>(null);
+  const currentNumRef = useRef(targetPercentage);
+
+  useEffect(() => {
+    const startNum = currentNumRef.current;
+    const endNum = targetPercentage;
+    if (startNum === endNum) return;
+
+    const duration = 250; // smooth 250ms ease
+    const startTime = performance.now();
+
+    const animate = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / duration);
+      // Clean cubic ease-out
+      const easeOut = 1 - Math.pow(1 - progress, 3);
+      const val = Math.round(startNum + (endNum - startNum) * easeOut);
+      currentNumRef.current = val;
+      setDisplayNumber(val);
+
+      if (progress < 1) {
+        animRef.current = requestAnimationFrame(animate);
+      }
+    };
+
+    animRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      if (animRef.current) cancelAnimationFrame(animRef.current);
+    };
+  }, [targetPercentage]);
+
+  // Derived human percentage based on smoothly animated displayNumber
+  const humanPercentage = 100 - displayNumber;
+
+  // SVG Gauge calculations (240 deg arc on 240x240 box)
+  const radius = 92;
+  const strokeWidth = 8;
   const circumference = 2 * Math.PI * radius;
   const arcLength = circumference * (240 / 360);
-  const strokeDashoffset = arcLength - arcLength * Math.min(1.0, Math.max(0.0, score));
+  const strokeDashoffset = arcLength - arcLength * (displayNumber / 100);
 
   const getTheme = () => {
-    switch (threatLevel) {
+    switch (effectiveThreat) {
       case 'RED':
         return {
-          stroke: 'var(--color-danger)',
-          bg: 'var(--color-danger-bg)',
-          border: 'var(--color-danger-border)',
-          text: 'var(--color-danger-text)',
-          label: 'Synthetic Voice Clone',
-          icon: <ShieldAlert size={16} color="var(--color-danger)" />,
+          primary: '#dc2626',
+          badgeVariant: 'destructive' as const,
+          label: isSessionMean
+            ? 'AI Synthetic Voice Clone'
+            : 'AI Synthetic Clone Detected',
+          subtext: isSessionMean
+            ? `Mean AI confidence of ${displayNumber}% across ${sessionSummary?.windowCount || 0} evaluated audio frames`
+            : 'Deep neural vocoder synthesis artifacts identified and confirmed',
+          icon: <ShieldAlert className="w-4 h-4 text-rose-600" />,
         };
       case 'AMBER':
         return {
-          stroke: 'var(--color-warn)',
-          bg: 'var(--color-warn-bg)',
-          border: 'var(--color-warn-border)',
-          text: 'var(--color-warn-text)',
-          label: 'Suspicious Acoustic Pattern',
-          icon: <AlertTriangle size={16} color="var(--color-warn)" />,
+          primary: '#d97706',
+          badgeVariant: 'warning' as const,
+          label: isSessionMean
+            ? 'Suspicious Vocal Anomalies'
+            : 'Suspicious Anomalies',
+          subtext: isSessionMean
+            ? `Acoustic inconsistencies flagged (Mean: ${displayNumber}%, Peak: ${peakPercentage}%)`
+            : 'Phase boundary discontinuity & vocoder cues flagged',
+          icon: <AlertTriangle className="w-4 h-4 text-amber-600" />,
         };
       case 'GREEN':
       default:
         return {
-          stroke: 'var(--color-primary)',
-          bg: 'var(--color-primary-light)',
-          border: 'var(--color-primary-border)',
-          text: 'var(--color-primary-text)',
-          label: 'Authentic Human Voice',
-          icon: <ShieldCheck size={16} color="var(--color-primary)" />,
+          primary: '#16a34a',
+          badgeVariant: 'success' as const,
+          label: isSessionMean
+            ? 'Authentic Human Voice'
+            : 'Authentic Human Voice Verified',
+          subtext: isSessionMean
+            ? `Natural human micro-tremor verified across full ${sessionSummary?.durationSeconds.toFixed(1) || 0}s duration`
+            : 'Natural biological respiration & micro-jitter confirmed',
+          icon: <UserCheck className="w-4 h-4 text-emerald-600" />,
         };
     }
   };
@@ -58,165 +145,161 @@ export const RiskGauge: React.FC<RiskGaugeProps> = ({
   const theme = getTheme();
 
   return (
-    <div
-      className="clean-card"
-      style={{
-        padding: '24px',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        position: 'relative',
-      }}
-    >
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+    <Card className="flex flex-col justify-between h-full bg-white border-slate-200/80 shadow-xs">
+      <CardHeader className="flex flex-row items-center justify-between p-5 sm:p-6 pb-2">
         <div>
-          <h2 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>
-            Threat Probability
-          </h2>
-          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Real-time composite biometric risk
-          </p>
-        </div>
-        <span
-          style={{
-            fontSize: '11px',
-            fontFamily: 'var(--font-mono)',
-            padding: '2px 8px',
-            borderRadius: 'var(--radius-xs)',
-            background: 'var(--bg-card-subtle)',
-            color: 'var(--text-secondary)',
-            border: '1px solid var(--border-subtle)',
-          }}
-        >
-          Live Evaluation
-        </span>
-      </div>
-
-      {/* Circular Meter */}
-      <div style={{ position: 'relative', width: '210px', height: '165px', display: 'flex', justifyContent: 'center', marginTop: '12px' }}>
-        <svg width="210" height="210" viewBox="0 0 210 210" style={{ transform: 'rotate(150deg)' }}>
-          {/* Background track */}
-          <circle
-            cx="105"
-            cy="105"
-            r={radius}
-            fill="none"
-            stroke="#f1f5f9"
-            strokeWidth={strokeWidth}
-            strokeDasharray={`${arcLength} ${circumference}`}
-            strokeLinecap="round"
-          />
-          {/* Active meter arc */}
-          <circle
-            cx="105"
-            cy="105"
-            r={radius}
-            fill="none"
-            stroke={theme.stroke}
-            strokeWidth={strokeWidth}
-            strokeDasharray={`${arcLength} ${circumference}`}
-            strokeDashoffset={strokeDashoffset}
-            strokeLinecap="round"
-            style={{
-              transition: 'stroke-dashoffset 0.3s cubic-bezier(0.4, 0, 0.2, 1), stroke 0.3s ease',
-            }}
-          />
-        </svg>
-
-        {/* Center Readout */}
-        <div
-          style={{
-            position: 'absolute',
-            top: '40px',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <div
-            style={{
-              fontSize: '44px',
-              fontWeight: 700,
-              lineHeight: 1,
-              color: 'var(--text-primary)',
-              letterSpacing: '-0.02em',
-            }}
-          >
-            {percentage}
-            <span style={{ fontSize: '20px', fontWeight: 500, color: theme.stroke, marginLeft: '2px' }}>%</span>
+          <div className="flex items-center gap-2">
+            <Shield className="w-4 h-4 text-blue-600" />
+            <CardTitle className="text-sm sm:text-base font-bold tracking-tight text-slate-900">
+              {isSessionMean ? 'Overall Mean AI Detection %' : 'AI Voice Detection %'}
+            </CardTitle>
           </div>
-          <span
-            style={{
-              fontSize: '11px',
-              fontWeight: 500,
-              color: 'var(--text-muted)',
-              marginTop: '4px',
-              letterSpacing: '0.02em',
-            }}
+          <CardDescription className="text-xs text-slate-500 mt-1">
+            {isSessionMean
+              ? `Audited across ${sessionSummary.durationSeconds.toFixed(1)}s audio duration (${sessionSummary.windowCount} windows)`
+              : 'Neural & acoustic clone probability analysis'}
+          </CardDescription>
+        </div>
+
+        {isSessionMean ? (
+          <Badge variant="success" className="shrink-0 text-xs px-2.5 py-1 gap-1.5 font-semibold">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+            Completed Audit
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="shrink-0 text-xs px-2.5 py-1 gap-1.5 font-mono text-slate-600 bg-slate-50 border-slate-200">
+            <Cpu className="w-3.5 h-3.5 text-blue-600" />
+            AI Detector
+          </Badge>
+        )}
+      </CardHeader>
+
+      <CardContent className="flex flex-col items-center justify-between flex-1 p-5 sm:p-6 pt-2">
+        {/* Minimal Precision Circular Meter */}
+        <div className="relative w-[240px] h-[180px] flex justify-center mt-2">
+          <svg width="240" height="240" viewBox="0 0 240 240" className="overflow-visible">
+            {/* Subtle perimeter tick marks */}
+            <g opacity="0.4">
+              {TICKS.map((t, i) => (
+                <line
+                  key={i}
+                  x1={t.x1}
+                  y1={t.y1}
+                  x2={t.x2}
+                  y2={t.y2}
+                  stroke="#94a3b8"
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                />
+              ))}
+            </g>
+
+            {/* Background track */}
+            <circle
+              cx="120"
+              cy="120"
+              r={radius}
+              fill="none"
+              stroke="#f1f5f9"
+              strokeWidth={strokeWidth}
+              strokeDasharray={`${arcLength} ${circumference}`}
+              strokeLinecap="round"
+              transform="rotate(150 120 120)"
+            />
+
+            {/* Active meter arc (Driven in lockstep with displayNumber) */}
+            <circle
+              cx="120"
+              cy="120"
+              r={radius}
+              fill="none"
+              stroke={theme.primary}
+              strokeWidth={strokeWidth}
+              strokeDasharray={`${arcLength} ${circumference}`}
+              strokeDashoffset={strokeDashoffset}
+              strokeLinecap="round"
+              transform="rotate(150 120 120)"
+              style={{ transition: 'stroke 0.25s ease' }}
+            />
+          </svg>
+
+          {/* Center Readout */}
+          <div className="absolute top-[36px] flex flex-col items-center justify-center select-none pointer-events-none">
+            <div
+              className="text-3xl font-extrabold font-mono tracking-tight leading-none"
+              style={{ color: theme.primary }}
+            >
+              {displayNumber}
+              <span className="text-lg font-bold ml-0.5">%</span>
+            </div>
+            <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mt-1.5 px-2 py-0.5 rounded bg-slate-100/90 border border-slate-200/80">
+              {isSessionMean ? 'Overall Mean AI Score' : 'AI Generated'}
+            </span>
+            <div className="flex items-center gap-1.5 text-[11px] text-slate-500 font-medium mt-1.5">
+              <Activity className="w-3 h-3 text-slate-400" />
+              <span>Human Likelihood: <strong className="text-slate-800 font-mono font-semibold">{humanPercentage}%</strong></span>
+            </div>
+            {isSessionMean && (
+              <span className="mt-1.5 text-[10px] font-mono font-semibold text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded shadow-2xs">
+                Peak Spike: {peakPercentage}%
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Minimal Progress Bar */}
+        <div className="w-full mt-3 flex flex-col gap-1.5 px-2">
+          <div className="flex justify-between text-xs font-semibold">
+            <span className="flex items-center gap-1.5 text-xs" style={{ color: theme.primary }}>
+              <span
+                className="w-1.5 h-1.5 rounded-full"
+                style={{ backgroundColor: theme.primary }}
+              />
+              <span>AI Clone: <strong className="font-mono">{displayNumber}%</strong></span>
+            </span>
+            <span className="flex items-center gap-1.5 text-slate-500 text-xs">
+              <span>Human: <strong className="font-mono text-slate-700">{humanPercentage}%</strong></span>
+            </span>
+          </div>
+
+          {/* Clean minimal progress bar */}
+          <div className="w-full h-1.5 rounded-full bg-slate-100 overflow-hidden relative">
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${displayNumber}%`,
+                backgroundColor: theme.primary,
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Threat Level Badge & Forensic Subtext */}
+        <div className="flex flex-col items-center gap-1 w-full mt-4">
+          <Badge
+            variant={theme.badgeVariant}
+            className="px-4 py-1.5 text-xs font-bold gap-2 shadow-xs select-none rounded-lg"
           >
-            Risk Score
+            {theme.icon}
+            <span>{theme.label}</span>
+          </Badge>
+          <span className="text-xs text-slate-500 text-center px-4 leading-normal mt-1 max-w-[340px]">
+            {theme.subtext}
           </span>
         </div>
-      </div>
 
-      {/* Threat Level Badge */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          padding: '6px 14px',
-          borderRadius: 'var(--radius-full)',
-          background: theme.bg,
-          border: `1px solid ${theme.border}`,
-          marginTop: '4px',
-        }}
-      >
-        {theme.icon}
-        <span
-          style={{
-            fontSize: '12px',
-            fontWeight: 600,
-            color: theme.text,
-          }}
-        >
-          {theme.label}
-        </span>
-      </div>
-
-      {/* Action Recommended Footer */}
-      <div
-        style={{
-          marginTop: '18px',
-          width: '100%',
-          padding: '10px 14px',
-          borderRadius: 'var(--radius-sm)',
-          background: 'var(--bg-card-subtle)',
-          border: '1px solid var(--border-subtle)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}
-      >
-        <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 500 }}>Policy Action</span>
-        <span
-          style={{
-            fontSize: '11px',
-            fontFamily: 'var(--font-mono)',
-            fontWeight: 600,
-            color: theme.text,
-            background: theme.bg,
-            padding: '2px 8px',
-            borderRadius: 'var(--radius-xs)',
-            border: `1px solid ${theme.border}`,
-          }}
-        >
-          {actionRecommended}
-        </span>
-      </div>
-    </div>
+        {/* Enforced Security Policy Footer */}
+        <div className="mt-4 w-full p-2.5 rounded-lg bg-slate-50 border border-slate-200/80 flex items-center justify-between text-xs">
+          <span className="text-slate-500 font-semibold text-[11px] uppercase tracking-wider">
+            {isSessionMean ? 'Final Policy' : 'Enforced Policy'}
+          </span>
+          <span className="font-mono font-bold text-xs px-2.5 py-1 rounded-md bg-white border border-slate-200 text-slate-800 shadow-2xs">
+            {effectiveAction}
+          </span>
+        </div>
+      </CardContent>
+    </Card>
   );
 };
+
+export default RiskGauge;

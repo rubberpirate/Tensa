@@ -1,97 +1,98 @@
 import React from 'react';
-import { Shield, Activity, ArrowRight } from 'lucide-react';
+import { Shield, Activity, FileText, ArrowRight } from 'lucide-react';
+import { Badge } from './ui/badge';
+import { Button } from './ui/button';
+import { TabsList, TabsTrigger } from './ui/tabs';
 
 interface NavigationProps {
   currentPath: string;
   onNavigate: (path: string) => void;
+  isConnected?: boolean;
 }
 
-export const Navigation: React.FC<NavigationProps> = ({ currentPath, onNavigate }) => {
+export const Navigation: React.FC<NavigationProps> = ({ currentPath, onNavigate, isConnected }) => {
   const isSocPage = currentPath === '/soc';
 
   return (
-    <nav className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-xs">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+    <nav className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b border-slate-200/80">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 sm:h-15 flex items-center justify-between">
         {/* Brand & Logo */}
         <button
           onClick={() => onNavigate('/')}
-          className="flex items-center gap-3 cursor-pointer text-left bg-transparent border-0 p-0"
+          className="flex items-center gap-2.5 cursor-pointer text-left bg-transparent border-0 p-0 select-none group"
         >
-          <div className="w-10 h-10 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 shadow-xs">
-            <Shield className="w-5 h-5" />
+          <div className="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center shadow-xs transition-transform group-hover:scale-105">
+            <Shield className="w-4 h-4 text-white" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-base sm:text-lg text-slate-900 tracking-tight">
+            <div className="flex items-center gap-1.5">
+              <span className="font-semibold text-sm sm:text-base text-slate-900 tracking-tight">
                 Project Tensa
               </span>
-              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+              <Badge variant="secondary" className="text-[10px] font-mono px-1.5 py-0 text-slate-600 bg-slate-100 border-slate-200">
                 SIH 2026
-              </span>
+              </Badge>
             </div>
-            <p className="text-xs text-slate-500 hidden sm:block">
+            <p className="text-[11px] text-slate-500 hidden sm:block leading-none mt-0.5">
               Voice Cloning & Telecom Deepfake Defense
             </p>
           </div>
         </button>
 
-        {/* Navigation Links (Desktop) */}
-        {!isSocPage && (
-          <div className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600">
-            <a
-              href="#solutions"
-              className="hover:text-blue-600 transition-colors cursor-pointer"
+        {/* Center Mode Switcher Tabs */}
+        <div className="flex items-center">
+          <TabsList className="bg-slate-100/90 border border-slate-200/80 h-8 p-0.5">
+            <TabsTrigger
+              active={!isSocPage}
+              onClick={() => onNavigate('/')}
+              className="gap-1.5 px-3 py-1 text-xs"
             >
-              Solutions
-            </a>
-            <a
-              href="#indian-context"
-              className="hover:text-blue-600 transition-colors cursor-pointer"
-            >
-              Indian Context
-            </a>
-            <a
-              href="#architecture"
-              className="hover:text-blue-600 transition-colors cursor-pointer"
-            >
-              Architecture
-            </a>
-            <a
-              href="#compliance"
-              className="hover:text-blue-600 transition-colors cursor-pointer"
-            >
-              Compliance
-            </a>
-          </div>
-        )}
-
-        {/* Right CTA / Mode Switcher */}
-        <div className="flex items-center gap-3">
-          {isSocPage ? (
-            <>
-              <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-700">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                Live SOC Active
-              </div>
-              <button
-                onClick={() => onNavigate('/')}
-                className="flex items-center gap-2 px-3.5 py-1.5 rounded-md text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 transition-colors cursor-pointer shadow-xs"
-              >
-                ← Back to Overview
-              </button>
-            </>
-          ) : (
-            <button
+              <FileText className="w-3.5 h-3.5" />
+              <span>Overview</span>
+            </TabsTrigger>
+            <TabsTrigger
+              active={isSocPage}
               onClick={() => onNavigate('/soc')}
-              className="flex items-center gap-2 px-4 py-2 rounded-md text-xs sm:text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors cursor-pointer shadow-xs"
+              className="gap-1.5 px-3 py-1 text-xs"
             >
-              <Activity className="w-4 h-4" />
-              <span>Launch Live SOC Demo</span>
-              <ArrowRight className="w-3.5 h-3.5 ml-0.5" />
-            </button>
+              <Activity className="w-3.5 h-3.5 text-blue-600" />
+              <span>Live SOC</span>
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'
+                }`}
+              />
+            </TabsTrigger>
+          </TabsList>
+        </div>
+
+        {/* Right Action / Status */}
+        <div className="flex items-center gap-2.5">
+          {isSocPage ? (
+            <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-slate-50 border border-slate-200/80 text-xs font-medium text-slate-600 shadow-2xs">
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                }`}
+              />
+              <span className="text-[11px] font-mono">
+                {isConnected ? 'Engine Online' : 'Connecting...'}
+              </span>
+            </div>
+          ) : (
+            <Button
+              size="sm"
+              onClick={() => onNavigate('/soc')}
+              className="gap-1.5 h-8 text-xs font-semibold shadow-xs"
+            >
+              <Activity className="w-3.5 h-3.5" />
+              <span>Launch Live SOC</span>
+              <ArrowRight className="w-3 h-3" />
+            </Button>
           )}
         </div>
       </div>
     </nav>
   );
 };
+
