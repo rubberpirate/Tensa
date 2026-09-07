@@ -5,9 +5,10 @@ Combines:
   1. CUDA FP16 Tensor Core acceleration + optional torch.compile() (~12ms latency).
   2. Scipy polyphase rational resampler (10x faster than librosa).
   3. Sliding-window inference with Exponential Moving Average (EMA) smoothing and hysteresis.
-  4. DPDP-compliant in-memory array inference (detect_array) for zero-disk streaming.
-  5. Built-in ONNX export & INT8 Dynamic Quantization setup for lightweight edge CPU inference.
-  6. Integration with Wav2Vec2StreamingDetector for real-time 250ms chunk streaming.
+  4. Audio Silence & Empty Audio Detection (RMS + dBFS thresholding) to avoid false triggers on silence.
+  5. DPDP-compliant in-memory array inference (detect_array) for zero-disk streaming.
+  6. Built-in ONNX export & INT8 Dynamic Quantization setup for lightweight edge CPU inference.
+  7. Integration with Wav2Vec2StreamingDetector for real-time 250ms chunk streaming.
 """
 
 from __future__ import annotations
@@ -55,6 +56,92 @@ HUMAN_THRESHOLD = 0.35
 EMA_ALPHA = 0.4
 AI_CONFIRMATIONS = 2
 HUMAN_CONFIRMATIONS = 2
+
+# Silence Detection Thresholds
+SILENCE_DB_THRESHOLD = -45.0  # Chunks below -45 dBFS are considered empty/silent
+MIN_RMS_THRESHOLD = 0.001
+
+
+# ---------------------------------------------------------------------------
+# Silence & Empty Audio Detector
+# ---------------------------------------------------------------------------
+
+class AudioSilenceDetector:
+    """
+    Detects empty or silent audio chunks based on RMS energy and decibel level (dBFS).
+    Optionally utilizes webrtcvad if installed in the environment.
+    """
+
+    def __init__(self, silence_db_threshold: float = SILENCE_DB_THRESHOLD, min_rms_threshold: float = MIN_RMS_THRESHOLD):
+        self.silence_db_threshold = silence_db_threshold
+        self.min_rms_threshold = min_rms_threshold
+
+        try:
+            import webrtcvad
+            self.webrtcvad = webrtcvad.Vad(1)
+        except ImportError:
+            self.webrtcvad = None
+
+    def is_empty(self, audio_chunk: np.ndarray, sample_rate: int = AUDIO_SAMPLE_RATE) -> Tuple[bool, float]:
+        """
+        Returns (is_empty: bool, dbfs_level: float).
+        audio_chunk is assumed to be float32 1D numpy array in [-1.0, 1.0].
+        """
+        if len(audio_chunk) == 0:
+            return True, -100.0
+
+        # Calculate Root Mean Square (RMS) energy
+        rms = float(np.sqrt(np.mean(np.square(audio_chunk))))
+        if rms < 1e-7:
+            return True, -100.0
+
+        # Convert RMS to dBFS
+        dbfs = float(20.0 * np.log10(rms))
+
+        # Primary check: energy below threshold
+        if dbfs < self.silence_db_threshold or rms < self.min_rms_threshold:
+            return True, dbfs
+
+        # Optional WebRTC VAD check if webrtcvad package is available
+        if self.webrtcvad is not None:
+            pcm_data = (audio_chunk * 32767.0).clip(-32768, 32767).astype(np.int16).tobytes()
+            frame_size = int(sample_rate * 0.03) * 2  # 30ms frame in bytes (2 bytes/sample)
+            has_speech = False
+            for offset in range(0, len(pcm_data) - frame_size, frame_size):
+                frame = pcm_data[offset : offset + frame_size]
+                if self.webrtcvad.is_speech(frame, sample_rate):
+                    has_speech = True
+                    break
+            if not has_speech:
+                return True, dbfs
+
+        return False, dbfs
+
+
+def get_audio_durations(audio_16khz: np.ndarray, silence_detector: AudioSilenceDetector, frame_sec: float = 0.1) -> Tuple[float, float, float]:
+    """
+    Calculates (total_duration, active_duration, trimmed_silence_duration) in seconds.
+    """
+    total_sec = len(audio_16khz) / AUDIO_SAMPLE_RATE
+    if total_sec == 0:
+        return 0.0, 0.0, 0.0
+
+    frame_samples = int(AUDIO_SAMPLE_RATE * frame_sec)
+    if frame_samples == 0:
+        return total_sec, total_sec, 0.0
+
+    num_frames = len(audio_16khz) // frame_samples
+    active_frames = 0
+    for i in range(num_frames):
+        frame = audio_16khz[i * frame_samples : (i + 1) * frame_samples]
+        is_empty, _ = silence_detector.is_empty(frame)
+        if not is_empty:
+            active_frames += 1
+
+    active_sec = active_frames * frame_sec
+    active_sec = min(active_sec, total_sec)
+    trimmed_sec = max(0.0, total_sec - active_sec)
+    return total_sec, active_sec, trimmed_sec
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +361,7 @@ class ONNXInferenceEngine:
 
 _global_pytorch_engine: Optional[PyTorchInferenceEngine] = None
 _global_resampler: Optional[AudioResampler] = None
+_global_silence_detector: Optional[AudioSilenceDetector] = None
 
 
 def _get_pytorch_engine() -> PyTorchInferenceEngine:
@@ -288,6 +376,13 @@ def _get_resampler() -> AudioResampler:
     if _global_resampler is None:
         _global_resampler = AudioResampler(target_sample_rate=AUDIO_SAMPLE_RATE)
     return _global_resampler
+
+
+def _get_silence_detector() -> AudioSilenceDetector:
+    global _global_silence_detector
+    if _global_silence_detector is None:
+        _global_silence_detector = AudioSilenceDetector()
+    return _global_silence_detector
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +421,7 @@ def detect_array(audio_array: np.ndarray, sample_rate: int = AUDIO_SAMPLE_RATE) 
 
 
 # ---------------------------------------------------------------------------
-# File-Based Inference with Sliding Window & EMA Smoothing
+# File-Based Inference with Sliding Window, Silence Check & EMA Smoothing
 # ---------------------------------------------------------------------------
 
 def detect(
@@ -341,7 +436,7 @@ def detect(
     Analyze an audio file path.
 
     Modes:
-      - Default: Sliding window (3.0s window, 1.0s stride) with EMA hysteresis smoothing.
+      - Default: Sliding window (3.0s window, 1.0s stride) with silence detection & EMA smoothing.
       - direct: Single full-clip array inference without windowing.
       - use_streaming: 250ms streaming simulation with CNN cache via Wav2Vec2StreamingDetector.
       - use_onnx: High-speed INT8 / FP32 ONNX Runtime inference.
@@ -382,7 +477,7 @@ def detect(
         except ImportError:
             print("[Warning] model_runner not available, falling back to sliding window.")
 
-    # Direct single-clip mode
+    # Direct single-pass mode
     if direct:
         res = detect_array(audio_16k, sample_rate=AUDIO_SAMPLE_RATE)
         print()
@@ -409,6 +504,7 @@ def detect(
         engine = _get_pytorch_engine()
 
     decision_engine = DecisionEngine()
+    silence_detector = _get_silence_detector()
     win_samples = int(window_seconds * AUDIO_SAMPLE_RATE)
     hop_samples = int(stride_seconds * AUDIO_SAMPLE_RATE)
 
@@ -417,6 +513,10 @@ def detect(
         padded = np.zeros(win_samples, dtype=np.float32)
         padded[: len(audio_16k)] = audio_16k
         audio_16k = padded
+
+    total_chunks = 0
+    silent_chunks = 0
+    active_chunks = 0
 
     start_idx = 0
     print("\n" + "-" * 75)
@@ -427,13 +527,31 @@ def detect(
     t_start_all = time.perf_counter()
 
     while start_idx + win_samples <= len(audio_16k):
+        total_chunks += 1
         chunk = audio_16k[start_idx : start_idx + win_samples]
-        raw_ai_score, latency_ms = engine.predict(chunk)
-        status, ema_score = decision_engine.update(raw_ai_score)
 
         t_win_start = start_idx / AUDIO_SAMPLE_RATE
         t_win_end = (start_idx + win_samples) / AUDIO_SAMPLE_RATE
         window_str = f"{t_win_start:.1f}s - {t_win_end:.1f}s"
+
+        # Check if 3-second chunk is empty / silent before running model
+        is_empty, dbfs = silence_detector.is_empty(chunk)
+        if is_empty:
+            silent_chunks += 1
+            print(f"{window_str:<16} | {'[EMPTY/SILENT]':<14} | {decision_engine.ema_score:<12.2%} | {'0.0ms':<8} | {'SILENT':<8}")
+            window_results.append({
+                "window": window_str,
+                "raw_ai_score": None,
+                "ema_score": decision_engine.ema_score,
+                "latency_ms": 0.0,
+                "status": "SILENT",
+            })
+            start_idx += hop_samples
+            continue
+
+        active_chunks += 1
+        raw_ai_score, latency_ms = engine.predict(chunk)
+        status, ema_score = decision_engine.update(raw_ai_score)
 
         print(f"{window_str:<16} | {raw_ai_score:<14.2%} | {ema_score:<12.2%} | {latency_ms:<8.1f}ms | {status.upper():<8}")
         window_results.append({
@@ -452,11 +570,16 @@ def detect(
     if status_label == "UNKNOWN":
         status_label = "AI" if decision_engine.ema_score >= AI_THRESHOLD else ("HUMAN" if decision_engine.ema_score <= HUMAN_THRESHOLD else "UNCERTAIN")
 
+    total_sec, active_sec, trimmed_sec = get_audio_durations(audio_16k, silence_detector)
+    active_pct = (active_sec / total_sec * 100.0) if total_sec > 0 else 0.0
+
     final_prediction = "FAKE" if decision_engine.ema_score >= 0.5 else "REAL"
     prob_fake = decision_engine.ema_score
     prob_real = 1.0 - prob_fake
 
     print(f"File:                      {audio_path}")
+    print(f"Original Audio Duration:   {total_sec:.2f}s")
+    print(f"Active (Processed) Audio:  {active_sec:.2f}s ({active_pct:.1f}%)")
     print(f"Final Call Status:         {status_label} ({final_prediction})")
     print(f"Final Smoothed AI Score:   {prob_fake:.2%}")
     print(f"Final Human/Real Score:    {prob_real:.2%}")
@@ -470,6 +593,8 @@ def detect(
         "status": status_label,
         "ema_score": prob_fake,
         "latency_ms": total_latency_ms,
+        "active_duration_sec": active_sec,
+        "total_duration_sec": total_sec,
         "windows": window_results,
     }
 

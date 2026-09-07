@@ -22,6 +22,7 @@ frontend/node_modules/
 *.safetensors
 *.bin
 *.onnx
+*.data
 *.engine
 *.plan
 detection-model/optimized/*.onnx
