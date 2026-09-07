@@ -1,5 +1,5 @@
 import React from 'react';
-import { Shield, Activity, FileText, ArrowRight } from 'lucide-react';
+import { Shield, Activity, FileText, ArrowRight, PhoneCall } from 'lucide-react';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { TabsList, TabsTrigger } from './ui/tabs';
@@ -43,7 +43,7 @@ export const Navigation: React.FC<NavigationProps> = ({ currentPath, onNavigate,
         <div className="flex items-center">
           <TabsList className="bg-slate-100/90 border border-slate-200/80 h-8 p-0.5">
             <TabsTrigger
-              active={!isSocPage}
+              active={currentPath === '/'}
               onClick={() => onNavigate('/')}
               className="gap-1.5 px-3 py-1 text-xs"
             >
@@ -51,7 +51,15 @@ export const Navigation: React.FC<NavigationProps> = ({ currentPath, onNavigate,
               <span>Overview</span>
             </TabsTrigger>
             <TabsTrigger
-              active={isSocPage}
+              active={currentPath === '/dialer'}
+              onClick={() => onNavigate('/dialer')}
+              className="gap-1.5 px-3 py-1 text-xs"
+            >
+              <PhoneCall className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Phone Dialer</span>
+            </TabsTrigger>
+            <TabsTrigger
+              active={currentPath === '/soc'}
               onClick={() => onNavigate('/soc')}
               className="gap-1.5 px-3 py-1 text-xs"
             >

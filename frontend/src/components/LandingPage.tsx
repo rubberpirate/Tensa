@@ -26,9 +26,10 @@ import { TabsList, TabsTrigger } from './ui/tabs';
 
 interface LandingPageProps {
   onLaunchDemo: () => void;
+  onLaunchDialer?: () => void;
 }
 
-export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchDemo }) => {
+export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchDemo, onLaunchDialer }) => {
   const [activeSegment, setActiveSegment] = useState<'enterprise' | 'consumer'>('enterprise');
 
   return (
@@ -58,14 +59,25 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLaunchDemo }) => {
 
           {/* CTA Buttons */}
           <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3 w-full sm:w-auto">
+            {onLaunchDialer && (
+              <Button
+                size="lg"
+                onClick={onLaunchDialer}
+                className="w-full sm:w-auto gap-2 text-sm font-semibold h-11 px-6 bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs"
+              >
+                <PhoneCall className="w-4 h-4" />
+                <span>Simulate Phone Call</span>
+                <ArrowRight className="w-4 h-4 ml-1" />
+              </Button>
+            )}
             <Button
               size="lg"
+              variant={onLaunchDialer ? "outline" : "default"}
               onClick={onLaunchDemo}
               className="w-full sm:w-auto gap-2 text-sm font-semibold h-11 px-6 shadow-xs"
             >
-              <Activity className="w-4 h-4" />
-              <span>Launch Live Detection SOC</span>
-              <ArrowRight className="w-4 h-4 ml-1" />
+              <Activity className="w-4 h-4 text-blue-600" />
+              <span>Launch Live SOC</span>
             </Button>
             <Button
               variant="outline"

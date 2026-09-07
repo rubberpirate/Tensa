@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import type { RiskEvent, CallContextState, CodecProfile, SessionSummary, MetricsBreakdown, ThreatLevel } from './types';
 import { Navigation } from './components/Navigation';
 import { LandingPage } from './components/LandingPage';
+import { PhoneDialer } from './components/PhoneDialer';
 import { RiskGauge } from './components/RiskGauge';
 import { AudioOscilloscope } from './components/AudioOscilloscope';
 import { ExplainabilityRadar } from './components/ExplainabilityRadar';
@@ -38,6 +39,9 @@ const normalizePath = (pathname: string, hash: string): string => {
   const cleanHash = hash.toLowerCase().replace(/^#\/?/, '');
   if (cleanPath === '/soc' || cleanHash === 'soc') {
     return '/soc';
+  }
+  if (cleanPath === '/dialer' || cleanHash === 'dialer' || cleanPath === '/call' || cleanHash === 'call') {
+    return '/dialer';
   }
   return '/';
 };
@@ -301,7 +305,14 @@ export const App: React.FC = () => {
 
       {/* Main View Router */}
       {currentPath === '/' ? (
-        <LandingPage onLaunchDemo={() => navigateTo('/soc')} />
+        <LandingPage
+          onLaunchDemo={() => navigateTo('/soc')}
+          onLaunchDialer={() => navigateTo('/dialer')}
+        />
+      ) : currentPath === '/dialer' ? (
+        <main className="min-h-[calc(100vh-60px)] bg-zinc-100 flex flex-col justify-start">
+          <PhoneDialer onOpenSoc={() => navigateTo('/soc')} />
+        </main>
       ) : (
         /* Live SOC Detection Workbench */
         <main className="app-container py-6">
