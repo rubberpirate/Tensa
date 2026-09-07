@@ -238,7 +238,7 @@ class DecisionEngine:
 class PyTorchInferenceEngine:
     """High-speed PyTorch backend utilizing FP16 Tensor Cores on CUDA."""
 
-    def __init__(self, use_compile: bool = True):
+    def __init__(self, use_compile: bool = False):
         source = str(LOCAL_DIR) if LOCAL_WEIGHTS.exists() else HF_REPO_ID
         local_only = LOCAL_WEIGHTS.exists()
 
@@ -254,7 +254,7 @@ class PyTorchInferenceEngine:
         if self.device == "cuda":
             self.model = self.model.half()
 
-        # Optional torch.compile
+        # Optional torch.compile (requires Triton C toolchain)
         if use_compile and hasattr(torch, "compile"):
             try:
                 self.model = torch.compile(self.model, dynamic=True)
@@ -364,10 +364,10 @@ _global_resampler: Optional[AudioResampler] = None
 _global_silence_detector: Optional[AudioSilenceDetector] = None
 
 
-def _get_pytorch_engine() -> PyTorchInferenceEngine:
+def _get_pytorch_engine(use_compile: bool = False) -> PyTorchInferenceEngine:
     global _global_pytorch_engine
     if _global_pytorch_engine is None:
-        _global_pytorch_engine = PyTorchInferenceEngine(use_compile=True)
+        _global_pytorch_engine = PyTorchInferenceEngine(use_compile=use_compile)
     return _global_pytorch_engine
 
 
@@ -428,6 +428,7 @@ def detect(
     audio_path: str,
     use_onnx: bool = False,
     use_streaming: bool = False,
+    use_compile: bool = False,
     window_seconds: float = WINDOW_SECONDS,
     stride_seconds: float = STRIDE_SECONDS,
     direct: bool = False,
@@ -501,7 +502,7 @@ def detect(
             sys.exit(1)
         engine = ONNXInferenceEngine(onnx_path=onnx_path)
     else:
-        engine = _get_pytorch_engine()
+        engine = _get_pytorch_engine(use_compile=use_compile)
 
     decision_engine = DecisionEngine()
     silence_detector = _get_silence_detector()
@@ -695,6 +696,7 @@ def main():
     parser.add_argument("--stream", action="store_true", help="Simulate 250ms streaming chunks with CNN caching")
     parser.add_argument("--direct", action="store_true", help="Run direct single-pass array inference")
     parser.add_argument("--setup", action="store_true", help="Export to ONNX FP32 and build INT8 quantized model")
+    parser.add_argument("--compile", action="store_true", help="Enable torch.compile (requires Triton C toolchain)")
     parser.add_argument("--window", type=float, default=WINDOW_SECONDS, help="Sliding window size in seconds (default: 3.0)")
     parser.add_argument("--stride", type=float, default=STRIDE_SECONDS, help="Sliding window stride in seconds (default: 1.0)")
     args = parser.parse_args()
@@ -711,6 +713,7 @@ def main():
         audio_path=args.audio_file,
         use_onnx=args.onnx,
         use_streaming=args.stream,
+        use_compile=args.compile,
         window_seconds=args.window,
         stride_seconds=args.stride,
         direct=args.direct,
