@@ -98,15 +98,28 @@ python backend/run.py --reload
 cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 3. Launch All Services (Backend + Frontend)
+### 3. Launch All Services (FastAPI + Dialer Backend + Frontend)
 ```bash
-./scripts/start.sh
+# Option A: Unified interactive mode with color-coded live logs (Ctrl+C to stop)
+./start.sh
+
+# Option B: Background daemon mode (logs saved to logs/)
+./start.sh --detach
+
+# Check live health status of all services
+./start.sh --status
+
+# Stop all services cleanly
+./stop.sh
 ```
 
-- **SOC Dashboard**: [http://localhost:5173](http://localhost:5173)
-- **FastAPI Backend**: [http://localhost:8000](http://localhost:8000)
+- **SOC Dashboard (Frontend)**: [http://localhost:5173](http://localhost:5173)
+- **FastAPI Detection Backend**: [http://localhost:8000](http://localhost:8000)
 - **Interactive API Docs (Swagger)**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **WebSocket Streaming Route**: `ws://localhost:8000/v1/stream/detect`
+- **Voice Streaming WebSocket**: `ws://localhost:8000/v1/stream/detect`
+- **Dialer Backend Health**: [http://localhost:8001/health](http://localhost:8001/health)
+- **Gemini Live Audio WebSocket**: `ws://localhost:8001/ws/dialer-live`
+- **Model Preloader Daemon (PyTorch IPC)**: `tcp://127.0.0.1:50000`
 
 ---
 
