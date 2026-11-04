@@ -33,5 +33,7 @@ detection-model/optimized/*.engine
 .vscode/
 .idea/
 *.log
+logs/
+.tensa.pids
 
 .env
